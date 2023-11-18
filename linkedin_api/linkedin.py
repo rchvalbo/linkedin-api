@@ -190,7 +190,7 @@ class Linkedin(object):
             data["elements"] = data["elements"] + res.json()["elements"]
             data["paging"] = res.json()["paging"]
         return data["elements"]
-
+    
     def search(self, params, limit=-1, offset=0):
         """Perform a LinkedIn search.
 
@@ -291,6 +291,7 @@ class Linkedin(object):
             self.logger.debug(f"results grew to {len(results)}")
 
         return results
+
 
     def search_people(
         self,
@@ -690,6 +691,7 @@ class Linkedin(object):
         """
         # NOTE this still works for now, but will probably eventually have to be converted to
         # https://www.linkedin.com/voyager/api/identity/profiles/ACoAAAKT9JQBsH7LwKaE9Myay9WcX8OVGuDq9Uw
+
         res = self._fetch(f"/identity/profiles/{public_id or urn_id}/profileView")
 
         data = res.json()
@@ -802,6 +804,63 @@ class Linkedin(object):
         :rtype: list
         """
         return self.search_people(connection_of=urn_id, network_depth="F")
+    
+    def get_profile_connections_v2(self):
+
+        """Fetch first-degree connections for a given LinkedIn profile.
+
+        https://www.linkedin.com/voyager/api/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED&start=40
+
+
+
+
+        :param urn_id: LinkedIn URN ID for a profile
+        :type urn_id: str
+
+        :return: List of search results
+        :rtype: list
+        """
+
+        stopPolling = False
+        maxCount = 1400
+        collectedConnections = []
+
+        while not stopPolling:
+            if(len(collectedConnections) >= maxCount):
+                print(f"Stopping! Max reached: {len(collectedConnections)}")
+                stopPolling = True
+                continue
+            sleep(3)
+            print(f"Fetching connections, starting from {len(collectedConnections)}")
+            # res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED&start={len(collectedConnections)}")
+
+            res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED&start={len(collectedConnections)}")
+            data = res.json()
+
+            # parse the result into something readable
+            elements = data.get("elements")
+            if(not elements):
+                print(f"Stopping! Elements list not found. Found: {len(collectedConnections)} connections.")
+                stopPolling = True
+                continue
+            if(len(elements) < 1):
+                print(f"Stopping! All connections retrieved. Found: {len(collectedConnections)} connections.")
+                stopPolling = True
+                continue
+
+            print("completed!", data)
+            for element in elements:
+                inner = element.get("connectedMemberResolutionResult")
+                if(not inner): continue
+                formattedProfile = {
+                    "firstName": inner.get("firstName"),
+                    "lastName": inner.get("lastName"),
+                    "profileUrn": inner.get("entityUrn"),
+                }
+                collectedConnections.append(formattedProfile)
+
+        print(f"Returning {len(collectedConnections)} connections!")
+        return collectedConnections
 
     def get_company_updates(
         self, public_id=None, urn_id=None, max_results=None, results=None

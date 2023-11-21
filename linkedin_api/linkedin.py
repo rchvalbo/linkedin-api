@@ -35,7 +35,7 @@ def default_evade():
     A catch-all method to try and evade suspension from Linkedin.
     Currenly, just delays the request by a random (bounded) time
     """
-    sleep(random.randint(2, 5))  # sleep a random duration to try and evade suspention
+    sleep(random.randint(2, 4))  # sleep a random duration to try and evade suspention
 
 
 class Linkedin(object):
@@ -55,6 +55,8 @@ class Linkedin(object):
         200  # VERY conservative max requests count to avoid rate-limit
     )
 
+    withoutEvade = False
+
     def __init__(
         self,
         username,
@@ -66,6 +68,7 @@ class Linkedin(object):
         proxies={},
         cookies=None,
         cookies_dir=None,
+        withoutEvade=False
     ):
         """Constructor method"""
         self.client = Client(
@@ -76,6 +79,7 @@ class Linkedin(object):
         )
         logging.basicConfig(level=logging.DEBUG if debug else logging.INFO)
         self.logger = logger
+        self.withoutEvade = withoutEvade
 
         if authenticate:
             if cookies:
@@ -85,16 +89,22 @@ class Linkedin(object):
             else:
                 self.client.authenticate(username, password)
 
-    def _fetch(self, uri, evade=default_evade, base_request=False, **kwargs):
+    def _evade(self):
+        if(self.withoutEvade): return
+        else: default_evade()
+
+    def _fetch(self, uri, evade=None, base_request=False, **kwargs):
         """GET request to Linkedin API"""
-        evade()
+        if(evade): evade()
+        else: self._evade()
 
         url = f"{self.client.API_BASE_URL if not base_request else self.client.LINKEDIN_BASE_URL}{uri}"
         return self.client.session.get(url, **kwargs)
 
-    def _post(self, uri, evade=default_evade, base_request=False, **kwargs):
+    def _post(self, uri, evade=None, base_request=False, **kwargs):
         """POST request to Linkedin API"""
-        evade()
+        if(evade): evade()
+        else: self._evade()
 
         url = f"{self.client.API_BASE_URL if not base_request else self.client.LINKEDIN_BASE_URL}{uri}"
         return self.client.session.post(url, **kwargs)
@@ -805,14 +815,9 @@ class Linkedin(object):
         """
         return self.search_people(connection_of=urn_id, network_depth="F")
     
-    def get_profile_connections_v2(self):
+    def get_my_connections(self, count=40, offset=0):
 
-        """Fetch first-degree connections for a given LinkedIn profile.
-
-        https://www.linkedin.com/voyager/api/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED&start=40
-
-
-
+        """Fetch first-degree connections for the currently logged in profile.
 
         :param urn_id: LinkedIn URN ID for a profile
         :type urn_id: str
@@ -821,43 +826,34 @@ class Linkedin(object):
         :rtype: list
         """
 
-        stopPolling = False
-        maxCount = 1400
         collectedConnections = []
 
-        while not stopPolling:
-            if(len(collectedConnections) >= maxCount):
-                print(f"Stopping! Max reached: {len(collectedConnections)}")
-                stopPolling = True
-                continue
-            sleep(3)
-            print(f"Fetching connections, starting from {len(collectedConnections)}")
-            # res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED&start={len(collectedConnections)}")
+        sleep(3)
+        print(f"Fetching connections, starting from {len(collectedConnections)}")
 
-            res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED&start={len(collectedConnections)}")
-            data = res.json()
+        res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count={count}&q=search&sortType=RECENTLY_ADDED&start={offset}")
+        data = res.json()
 
-            # parse the result into something readable
-            elements = data.get("elements")
-            if(not elements):
-                print(f"Stopping! Elements list not found. Found: {len(collectedConnections)} connections.")
-                stopPolling = True
-                continue
-            if(len(elements) < 1):
-                print(f"Stopping! All connections retrieved. Found: {len(collectedConnections)} connections.")
-                stopPolling = True
-                continue
+        # parse the result into something readable
+        elements = data.get("elements")
+        if(not elements):
+            print(f"Stopping! Elements list not found. Found: {len(collectedConnections)} connections.")
+            return []
+        if(len(elements) < 1):
+            print(f"Stopping! All connections retrieved. Found: {len(collectedConnections)} connections.")
+            return []
 
-            print("completed!", data)
-            for element in elements:
-                inner = element.get("connectedMemberResolutionResult")
-                if(not inner): continue
-                formattedProfile = {
-                    "firstName": inner.get("firstName"),
-                    "lastName": inner.get("lastName"),
-                    "profileUrn": inner.get("entityUrn"),
-                }
-                collectedConnections.append(formattedProfile)
+        print("completed!")
+
+        for element in elements:
+            inner = element.get("connectedMemberResolutionResult")
+            if(not inner): continue
+            formattedProfile = {
+                "firstName": inner.get("firstName"),
+                "lastName": inner.get("lastName"),
+                "profileUrn": inner.get("entityUrn"),
+            }
+            collectedConnections.append(formattedProfile)
 
         print(f"Returning {len(collectedConnections)} connections!")
         return collectedConnections

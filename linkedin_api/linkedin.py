@@ -10,8 +10,8 @@ from operator import itemgetter
 from time import sleep, time
 from urllib.parse import quote, urlencode
 
-from linkedin_api.client import Client
-from linkedin_api.utils.helpers import (
+from .client import Client
+from .utils.helpers import (
     append_update_post_field_to_posts_list,
     get_id_from_urn,
     get_urn_from_raw_update,

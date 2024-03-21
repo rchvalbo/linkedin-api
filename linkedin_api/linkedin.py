@@ -99,7 +99,15 @@ class Linkedin(object):
         else: self._evade()
 
         url = f"{self.client.API_BASE_URL if not base_request else self.client.LINKEDIN_BASE_URL}{uri}"
-        return self.client.session.get(url, **kwargs)
+
+        #! This is a good way to verify that the proxy is actually being used by the client.session.get()
+        #! Uncomment the request and log below to run proxy check
+        # print("self.client.session.proxies: ", self.client.session.proxies)
+        proxyCheckResponse = self.client.session.get("https://ipv4.icanhazip.com")
+        print("\n\n [Proxy Ip Test] Origin IP:", proxyCheckResponse.content, "\n\n")
+
+        response = self.client.session.get(url, **kwargs)
+        return response
 
     def _post(self, uri, evade=None, base_request=False, **kwargs):
         """POST request to Linkedin API"""
@@ -107,7 +115,9 @@ class Linkedin(object):
         else: self._evade()
 
         url = f"{self.client.API_BASE_URL if not base_request else self.client.LINKEDIN_BASE_URL}{uri}"
-        return self.client.session.post(url, **kwargs)
+        
+        response = self.client.session.post(url, **kwargs)
+        return response
 
     def get_profile_posts(self, public_id=None, urn_id=None, post_count=10):
         """

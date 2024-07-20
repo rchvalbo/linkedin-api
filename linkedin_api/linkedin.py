@@ -624,22 +624,31 @@ class Linkedin(object):
 
         return results
 
-    def search_geography(self, keywords):
-        """Perform a fuzzy location search based on the provided keywords.
+    def search_typeahead(self, keywords, search_type):
+        """Perform a fuzzy typeahead search based on the provided keywords and search type.
 
         :param keywords: The search keywords
         :type keywords: str
+        :param search_type: The type of search (e.g., GEO, COMPANY)
+        :type search_type: str
 
         :return: List of search results
         :rtype: list
         """
 
+        def _get_query_for_type():
+            """Helper function to get the correct query parameter based on search type."""
+            if search_type == "GEO":
+                return "(typeaheadFilterQuery:(geoSearchTypes:List(MARKET_AREA,COUNTRY_REGION,ADMIN_DIVISION_1,CITY)))"
+            else:
+                return "()"
+
         # Construct the base URL and query parameters
         base_url = "/graphql"
         query_parameters = {
             "keywords": keywords,
-            "query": "(typeaheadFilterQuery:(geoSearchTypes:List(MARKET_AREA,COUNTRY_REGION,ADMIN_DIVISION_1,CITY)))",
-            "type": "GEO"
+            "query": _get_query_for_type(),
+            "type": search_type
         }
         query_id = "voyagerSearchDashReusableTypeahead.f4b5dab74a7f77bb04289c36f40c7338"
 
@@ -649,15 +658,16 @@ class Linkedin(object):
         # Construct the final URL
         full_url = f"{base_url}?{query_string}"
 
+
         # Define headers
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "Accept": "application/vnd.linkedin.normalized+json+2.1",
             "X-RestLi-Protocol-Version": "2.0.0",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
-         # Fetch the search results
+        # Fetch the search results
         try:
             res = self._fetch(full_url, headers=headers)
             res.raise_for_status()  # Raise an exception for HTTP errors
@@ -668,16 +678,13 @@ class Linkedin(object):
             print(f"Other error occurred: {err}")
             return []
 
-        # debug print
-        # print("[search_geography] keywords: ",{"keywords": keywords, "full_url": full_url, "res": res.status_code})
-
         # Attempt to parse JSON response
         try:
             data = res.json()
         except ValueError:
             # If response is not JSON, print and inspect the response content
             print("Response is not in JSON format. Here is the raw response content:")
-            # print(res.text)
+            print(res.text)
             return []
 
         # Parse the results
@@ -688,9 +695,8 @@ class Linkedin(object):
         search_results = []
         for element in elements:
             search_result = {
-                "trackingUrn": element.get("trackingUrn"),
                 "title": element.get("title", {}).get("text"),
-                "geoUrn": element.get("target", {}).get("*geo")
+                "objectUrn": element.get("trackingUrn")
             }
             search_results.append(search_result)
 

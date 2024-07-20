@@ -10,6 +10,8 @@ from operator import itemgetter
 from time import sleep, time
 from urllib.parse import quote, urlencode
 
+import requests
+
 from .client import Client
 from .utils.helpers import (
     append_update_post_field_to_posts_list,
@@ -622,6 +624,79 @@ class Linkedin(object):
 
         return results
 
+    def search_geography(self, keywords):
+        """Perform a fuzzy location search based on the provided keywords.
+
+        :param keywords: The search keywords
+        :type keywords: str
+
+        :return: List of search results
+        :rtype: list
+        """
+
+        # Construct the base URL and query parameters
+        base_url = "/graphql"
+        query_parameters = {
+            "keywords": keywords,
+            "query": "(typeaheadFilterQuery:(geoSearchTypes:List(MARKET_AREA,COUNTRY_REGION,ADMIN_DIVISION_1,CITY)))",
+            "type": "GEO"
+        }
+        query_id = "voyagerSearchDashReusableTypeahead.f4b5dab74a7f77bb04289c36f40c7338"
+
+        # Create the query string from the parameters
+        query_string = f"variables=(keywords:{query_parameters['keywords']},query:{query_parameters['query']},type:{query_parameters['type']})&queryId={query_id}"
+        
+        # Construct the final URL
+        full_url = f"{base_url}?{query_string}"
+
+        # Define headers
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/vnd.linkedin.normalized+json+2.1",
+            "X-RestLi-Protocol-Version": "2.0.0",
+            "Content-Type": "application/json"
+        }
+
+         # Fetch the search results
+        try:
+            res = self._fetch(full_url, headers=headers)
+            res.raise_for_status()  # Raise an exception for HTTP errors
+        except requests.exceptions.HTTPError as http_err:
+            print(f"HTTP error occurred: {http_err}")
+            return []
+        except Exception as err:
+            print(f"Other error occurred: {err}")
+            return []
+
+        # debug print
+        # print("[search_geography] keywords: ",{"keywords": keywords, "full_url": full_url, "res": res.status_code})
+
+        # Attempt to parse JSON response
+        try:
+            data = res.json()
+        except ValueError:
+            # If response is not JSON, print and inspect the response content
+            print("Response is not in JSON format. Here is the raw response content:")
+            # print(res.text)
+            return []
+
+        # Parse the results
+        search_data = data.get("data", {}).get("data", {}).get("searchDashReusableTypeaheadByType", {})
+        elements = search_data.get("elements", [])
+
+        # Extract relevant information from the elements
+        search_results = []
+        for element in elements:
+            search_result = {
+                "trackingUrn": element.get("trackingUrn"),
+                "title": element.get("title", {}).get("text"),
+                "geoUrn": element.get("target", {}).get("*geo")
+            }
+            search_results.append(search_result)
+
+        # Return the search results
+        return search_results
+
     def get_profile_contact_info(self, public_id=None, urn_id=None):
         """Fetch contact information for a given LinkedIn profile. Pass a [public_id] or a [urn_id].
 
@@ -816,38 +891,48 @@ class Linkedin(object):
         return self.search_people(connection_of=urn_id, network_depth="F")
     
     def get_my_connections(self, count=40, offset=0):
-
         """Fetch first-degree connections for the currently logged in profile.
 
-        :param urn_id: LinkedIn URN ID for a profile
-        :type urn_id: str
+        :param count: Number of connections to fetch
+        :type count: int
+        :param offset: Offset to start fetching connections from
+        :type offset: int
 
-        :return: List of search results
+        :return: List of dictionaries containing connection details
         :rtype: list
         """
 
+        # Initialize an empty list to store collected connections
         collectedConnections = []
 
+        # Wait for 3 seconds before making the request to avoid hitting rate limits
         sleep(3)
         print(f"Fetching connections, starting from {len(collectedConnections)}")
 
+        # Fetch connections using LinkedIn API endpoint with provided count and offset
         res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count={count}&q=search&sortType=RECENTLY_ADDED&start={offset}")
         data = res.json()
 
-        # parse the result into something readable
+        # Extract elements from the response data
         elements = data.get("elements")
-        if(not elements):
+        
+        # If no elements are found, print a message and return an empty list
+        if not elements:
             print(f"Stopping! Elements list not found. Found: {len(collectedConnections)} connections.")
             return []
-        if(len(elements) < 1):
+        
+        # If elements list is empty, print a message and return an empty list
+        if len(elements) < 1:
             print(f"Stopping! All connections retrieved. Found: {len(collectedConnections)} connections.")
             return []
 
         print("completed!")
 
+        # Iterate through the elements to format and collect connections
         for element in elements:
             inner = element.get("connectedMemberResolutionResult")
-            if(not inner): continue
+            if not inner: 
+                continue
             formattedProfile = {
                 "firstName": inner.get("firstName"),
                 "lastName": inner.get("lastName"),
@@ -855,6 +940,7 @@ class Linkedin(object):
             }
             collectedConnections.append(formattedProfile)
 
+        # Print the number of connections collected and return the list
         print(f"Returning {len(collectedConnections)} connections!")
         return collectedConnections
 

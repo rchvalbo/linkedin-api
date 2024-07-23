@@ -629,7 +629,7 @@ class Linkedin(object):
 
         :param keywords: The search keywords
         :type keywords: str
-        :param search_type: The type of search (e.g., GEO, COMPANY)
+        :param search_type: The type of search (e.g., GEO, COMPANY, SCHOOL) Find this by making the request on Linkedin, and checking the request url params
         :type search_type: str
 
         :return: List of search results

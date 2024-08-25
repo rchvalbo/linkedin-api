@@ -27,6 +27,7 @@ from .utils.helpers import (
     parse_list_raw_urns,
     generate_trackingId,
     generate_trackingId_as_charString,
+    get_nested
 )
 
 logger = logging.getLogger(__name__)
@@ -640,6 +641,8 @@ class Linkedin(object):
             """Helper function to get the correct query parameter based on search type."""
             if search_type == "GEO":
                 return "(typeaheadFilterQuery:(geoSearchTypes:List(MARKET_AREA,COUNTRY_REGION,ADMIN_DIVISION_1,CITY)))"
+            if search_type == "SKILL":
+                return "(typeaheadUseCase:MARKETPLACE)"
             else:
                 return "()"
 
@@ -688,15 +691,83 @@ class Linkedin(object):
             return []
 
         # Parse the results
+        # search_data = data.get("data", {}).get("data", {}).get("searchDashReusableTypeaheadByType", {})
+        # elements = search_data.get("elements", [])
+        # # print(f"Found {len(elements)} search results => {elements}")
+
+        # # Extract relevant information from the elements
+        # search_results = []
+        # for element in elements:
+        #     image_url = None
+        
+        #     # Check if 'image' and 'attributes' are present
+        #     image_data = element.get("image", {}).get("attributes", [])
+        #     if image_data:
+        #         # Assume we take the first vectorImage in attributes
+        #         vector_image = image_data[0].get("detailData", {}).get("nonEntityCompanyLogo", {}).get("vectorImage", {})
+        #         root_url = vector_image.get("rootUrl")
+                
+        #         # Search for the largest available artifact, e.g., 400 width
+        #         artifacts = vector_image.get("artifacts", [])
+        #         if artifacts:
+        #             # Extract the fileIdentifyingUrlPathSegment of the largest artifact (if present)
+        #             file_segment = None
+        #             for artifact in artifacts:
+        #                 if artifact.get("width") == 400:
+        #                     file_segment = artifact.get("fileIdentifyingUrlPathSegment")
+        #                     break
+        #             if not file_segment:
+        #                 # Fallback to the first artifact
+        #                 file_segment = artifacts[0].get("fileIdentifyingUrlPathSegment")
+                    
+        #             if root_url and file_segment:
+        #                 image_url = f"{root_url}{file_segment}"
+        #     search_result = {
+        #         "title": element.get("title", {}).get("text"),
+        #         "objectUrn": element.get("trackingUrn")
+        #     }
+        #     search_results.append(search_result)
+        # Assuming the nested data is provided in a variable called 'data'
+        # Assuming the nested data is provided in a variable called 'data'
         search_data = data.get("data", {}).get("data", {}).get("searchDashReusableTypeaheadByType", {})
         elements = search_data.get("elements", [])
+        # print(f"Found {len(elements)} search results => {elements}")
 
         # Extract relevant information from the elements
         search_results = []
         for element in elements:
+            # Initialize image_url to None
+            image_url = None
+            
+            # Check if 'image' and 'attributes' are present
+            image_data = element.get("image", {}).get("attributes", [])
+            if image_data:
+                # Assume we take the first vectorImage in attributes
+                vector_image = image_data[0].get("detailData", {}).get("nonEntityCompanyLogo", {}).get("vectorImage", {})
+                root_url = vector_image.get("rootUrl", None)
+                
+                # Search for the largest available artifact, e.g., 400 width
+                file_segment = None
+                artifacts = vector_image.get("artifacts", [])
+                if artifacts:
+                    # Try to find the largest artifact (e.g., 400 width)
+                    for artifact in artifacts:
+                        if artifact.get("width") == 400:
+                            file_segment = artifact.get("fileIdentifyingUrlPathSegment")
+                            break
+                    # If no 400-width artifact is found, fall back to the first artifact
+                    if not file_segment and artifacts:
+                        file_segment = artifacts[0].get("fileIdentifyingUrlPathSegment")
+                
+                # If both root_url and file_segment are available, construct image_url
+                if root_url and file_segment:
+                    image_url = f"{root_url}{file_segment}"
+
+            # Add the result to search_results
             search_result = {
                 "title": element.get("title", {}).get("text"),
-                "objectUrn": element.get("trackingUrn")
+                "objectUrn": element.get("trackingUrn"),
+                "image_url": image_url
             }
             search_results.append(search_result)
 

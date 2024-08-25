@@ -257,3 +257,22 @@ def generate_trackingId():
     random_int_array = [random.randrange(256) for _ in range(16)]
     rand_byte_array = bytearray(random_int_array)
     return str(base64.b64encode(rand_byte_array))[2:-1]
+
+# Function to safely navigate nested dictionaries
+def get_nested(data_dict, keys, default=None):
+    """
+    Safely get a nested value from a dictionary.
+    
+    :param data_dict: The dictionary to traverse.
+    :param keys: A list of keys representing the path to the desired value.
+    :param default: The default value to return if any key is missing.
+    :return: The retrieved value or the default.
+    """
+    for key in keys:
+        if isinstance(data_dict, dict):
+            data_dict = data_dict.get(key, default)
+        else:
+            return default
+        if data_dict is default:
+            return default
+    return data_dict

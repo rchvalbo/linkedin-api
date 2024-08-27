@@ -698,6 +698,13 @@ class Linkedin(object):
         search_results = []
         for element in elements:
             image_url = None
+            profile_urn = None
+            
+            # Check for 'CONNECTIONS' type to grab the profile URN
+            if search_type == "CONNECTIONS":
+                detail_data = element.get("image", {}).get("attributes", [{}])[0].get("detailData", {})
+                profile_data = detail_data.get("nonEntityProfilePicture", {})
+                profile_urn = profile_data.get("*profile")
             
             # Ensure 'image' and 'attributes' are available
             if not skip_image_url:
@@ -723,8 +730,6 @@ class Linkedin(object):
                         
                         if root_url and file_segment:
                             image_url = f"{root_url}{file_segment}"
-            else:
-                image_url = None
 
             # Add the result to search_results
             search_result = {
@@ -732,6 +737,8 @@ class Linkedin(object):
                 "objectUrn": element.get("trackingUrn", "No Urn"),
                 "image_url": image_url
             }
+            if search_type == "CONNECTIONS":
+                search_result["urn_id"] = profile_urn or None
             search_results.append(search_result)
 
             # Return the search results

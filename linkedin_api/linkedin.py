@@ -630,7 +630,7 @@ class Linkedin(object):
 
         :param keywords: The search keywords
         :type keywords: str
-        :param search_type: The type of search (e.g., GEO, COMPANY, SCHOOL) Find this by making the request on Linkedin, and checking the request url params
+        :param search_type: The type of search (e.g., GEO, COMPANY, SCHOOL, CONNECTIONS)
         :type search_type: str
 
         :return: List of search results
@@ -661,7 +661,6 @@ class Linkedin(object):
         # Construct the final URL
         full_url = f"{base_url}?{query_string}"
 
-
         # Define headers
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -685,56 +684,59 @@ class Linkedin(object):
         try:
             data = res.json()
         except ValueError:
-            # If response is not JSON, print and inspect the response content
             print("Response is not in JSON format. Here is the raw response content:")
             print(res.text)
             return []
 
-        # Assuming the nested data is provided in a variable called 'data'
+        # Safely access nested data
         search_data = data.get("data", {}).get("data", {}).get("searchDashReusableTypeaheadByType", {})
         elements = search_data.get("elements", [])
-        # print(f"Found {len(elements)} search results => {elements}")
 
-        # Extract relevant information from the elements
+        # Set the flag to skip image URL retrieval for specific search types
+        skip_image_url = search_type in ["GEO", "SKILL", "INDUSTRY"]
+
         search_results = []
         for element in elements:
-            # Initialize image_url to None
             image_url = None
             
-            # Check if 'image' and 'attributes' are present
-            image_data = element.get("image", {}).get("attributes", [])
-            if image_data:
-                # Assume we take the first vectorImage in attributes
-                vector_image = image_data[0].get("detailData", {}).get("nonEntityCompanyLogo", {}).get("vectorImage", {})
-                root_url = vector_image.get("rootUrl", None)
-                
-                # Search for the largest available artifact, e.g., 400 width
-                file_segment = None
-                artifacts = vector_image.get("artifacts", [])
-                if artifacts:
-                    # Try to find the largest artifact (e.g., 400 width)
-                    for artifact in artifacts:
-                        if artifact.get("width") == 400:
-                            file_segment = artifact.get("fileIdentifyingUrlPathSegment")
-                            break
-                    # If no 400-width artifact is found, fall back to the first artifact
-                    if not file_segment and artifacts:
-                        file_segment = artifacts[0].get("fileIdentifyingUrlPathSegment")
-                
-                # If both root_url and file_segment are available, construct image_url
-                if root_url and file_segment:
-                    image_url = f"{root_url}{file_segment}"
+            # Ensure 'image' and 'attributes' are available
+            if not skip_image_url:
+                image_data = element.get("image", {}).get("attributes", [])
+                if image_data is not None and isinstance(image_data, list) and len(image_data) > 0:
+                    detail_data = image_data[0].get("detailData", {})
+                    non_entity_logo = detail_data.get("nonEntityCompanyLogo") or detail_data.get("nonEntityProfilePicture", {})
+                    vector_image = non_entity_logo.get("vectorImage") if non_entity_logo else None
+                    
+                    if vector_image:
+                        root_url = vector_image.get("rootUrl", None)
+                        file_segment = None
+                        artifacts = vector_image.get("artifacts", [])
+                        
+                        if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
+                            # Try to find the largest artifact (e.g., 400 width)
+                            for artifact in artifacts:
+                                if artifact.get("width") == 400:
+                                    file_segment = artifact.get("fileIdentifyingUrlPathSegment")
+                                    break
+                            if not file_segment:
+                                file_segment = artifacts[0].get("fileIdentifyingUrlPathSegment")
+                        
+                        if root_url and file_segment:
+                            image_url = f"{root_url}{file_segment}"
+            else:
+                image_url = None
 
             # Add the result to search_results
             search_result = {
-                "title": element.get("title", {}).get("text"),
-                "objectUrn": element.get("trackingUrn"),
+                "title": element.get("title", {}).get("text", "No Title"),
+                "objectUrn": element.get("trackingUrn", "No Urn"),
                 "image_url": image_url
             }
             search_results.append(search_result)
 
-        # Return the search results
+            # Return the search results
         return search_results
+
 
     def get_profile_contact_info(self, public_id=None, urn_id=None):
         """Fetch contact information for a given LinkedIn profile. Pass a [public_id] or a [urn_id].

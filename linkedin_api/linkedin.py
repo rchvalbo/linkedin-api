@@ -2,6 +2,7 @@
 Provides linkedin api-related code
 """
 import base64
+from http.client import HTTPException
 import json
 import logging
 import random
@@ -12,7 +13,7 @@ from urllib.parse import quote, urlencode
 
 import requests
 
-from .client import Client
+from .client import Client, UnauthorizedException
 from .utils.helpers import (
     append_update_post_field_to_posts_list,
     get_id_from_urn,
@@ -243,17 +244,28 @@ class Linkedin(object):
                 else ""
             )
 
-            res = self._fetch(
-                f"/graphql?variables=(start:{default_params['start']},origin:{default_params['origin']},"
-                f"query:("
-                f"{keywords}"
-                f"flagshipSearchIntent:SEARCH_SRP,"
-                f"queryParameters:{default_params['filters']},"
-                f"includeFiltersInResponse:false))&=&queryId=voyagerSearchDashClusters"
-                f".b0928897b71bd00a5a7291755dcd64f0"
-            )
+            try:
+                res = self._fetch(
+                    f"/graphql?variables=(start:{default_params['start']},origin:{default_params['origin']},"
+                    f"query:("
+                    f"{keywords}"
+                    f"flagshipSearchIntent:SEARCH_SRP,"
+                    f"queryParameters:{default_params['filters']},"
+                    f"includeFiltersInResponse:false))&=&queryId=voyagerSearchDashClusters"
+                    f".b0928897b71bd00a5a7291755dcd64f0"
+                )
+                res.raise_for_status()
+            except requests.exceptions.HTTPError as error:
+                print(f"HTTP error occurred: {error}")
+                if error.response.status_code == 401:
+                    return res.json()
+            # except Exception as err:
+            #     print(f"Other error occurred: {err}")
+            #     return []
+            
             data = res.json()
 
+            
             data_clusters = data.get("data", []).get("searchDashClustersByAll", [])
 
             if not data_clusters:
@@ -699,7 +711,7 @@ class Linkedin(object):
         for element in elements:
             image_url = None
             profile_urn = None
-            
+
             # Check for 'CONNECTIONS' type to grab the profile URN
             if search_type == "CONNECTIONS":
                 detail_data = element.get("image", {}).get("attributes", [{}])[0].get("detailData", {})

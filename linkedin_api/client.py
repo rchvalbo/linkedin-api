@@ -26,16 +26,14 @@ class Client(object):
     REQUEST_HEADERS = {
         "user-agent": " ".join(
             [
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5)",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                 "AppleWebKit/537.36 (KHTML, like Gecko)",
-                "Chrome/83.0.4103.116 Safari/537.36",
+                "Chrome/128.0.0.0 Safari/537.36",
             ]
         ),
-        # "accept": "application/vnd.linkedin.normalized+json+2.1",
-        "accept-language": "en-AU,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+        "accept-language": "en-US,en;q=0.9",
         "x-li-lang": "en_US",
         "x-restli-protocol-version": "2.0.0",
-        # "x-li-track": '{"clientVersion":"1.2.6216","osName":"web","timezoneOffset":10,"deviceFormFactor":"DESKTOP","mpName":"voyager-web"}',
     }
 
     # Settings for authenticating with Linkedin

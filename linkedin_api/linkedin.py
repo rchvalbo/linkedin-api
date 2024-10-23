@@ -1400,29 +1400,24 @@ class Linkedin(object):
             profile_urn_string = self.get_profile(public_id=profile_public_id)[
                 "profile_urn"
             ]
-            # Returns string of the form 'urn:li:fs_miniProfile:ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w'
             # We extract the last part of the string
             profile_urn = profile_urn_string.split(":")[-1]
+            profile_urn = f"urn:li:fsd_profile:{profile_urn_string}"
+            
+        if not profile_urn.startswith("urn:li:fsd_profile:"):
+            profile_urn = f"urn:li:fsd_profile:{profile_urn}"
 
-        trackingId = generate_trackingId()
         payload = {
-            "trackingId": trackingId,
-            "message": message,
-            "invitations": [],
-            "excludeInvitations": [],
-            "invitee": {
-                "com.linkedin.voyager.growth.invitation.InviteeProfile": {
-                    "profileId": profile_urn
-                }
-            },
+            "invitee": {"inviteeUnion": {"memberProfile": f"{profile_urn}"}},
         }
         res = self._post(
-            "/growth/normInvitations",
+            "/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2",
             data=json.dumps(payload),
             headers={"accept": "application/vnd.linkedin.normalized+json+2.1"},
         )
+
         print('add_connection status code:', res.status_code)
-        return res.status_code != 201
+        return res.status_code != 200
 
     def remove_connection(self, public_profile_id):
         """Remove a given profile as a connection.

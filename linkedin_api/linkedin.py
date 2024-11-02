@@ -1226,6 +1226,7 @@ class Linkedin(object):
         return res.json()
 
     def send_message(self, message_body, conversation_urn_id=None, recipients=None):
+        print('send_message')
         """Send a message to a given conversation.
 
         :param message_body: Message text to send
@@ -1268,6 +1269,7 @@ class Linkedin(object):
                 data=json.dumps(message_event),
             )
         elif recipients and not conversation_urn_id:
+            print('recipients:', recipients)
             message_event["recipients"] = recipients
             message_event["subtype"] = "MEMBER_TO_MEMBER"
             payload = {
@@ -1279,6 +1281,7 @@ class Linkedin(object):
                 params=params,
                 data=json.dumps(payload),
             )
+            print('send_message status code:', res.status_code)
 
         return res.status_code != 201
 
@@ -1403,7 +1406,7 @@ class Linkedin(object):
             # We extract the last part of the string
             profile_urn = profile_urn_string.split(":")[-1]
             profile_urn = f"urn:li:fsd_profile:{profile_urn_string}"
-            
+
         if not profile_urn.startswith("urn:li:fsd_profile:"):
             profile_urn = f"urn:li:fsd_profile:{profile_urn}"
 

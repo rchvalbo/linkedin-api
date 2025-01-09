@@ -1379,7 +1379,7 @@ class Linkedin(object):
 
         return res.status_code == 200
 
-    def add_connection(self, profile_public_id, message="", profile_urn=None):
+    def add_connection(self, profile_public_id: str, message="", profile_urn=None):
         """Add a given profile id as a connection.
 
         :param profile_public_id: public ID of a LinkedIn profile
@@ -1399,28 +1399,39 @@ class Linkedin(object):
             return False
 
         if not profile_urn:
-            print('No profile urn')
             profile_urn_string = self.get_profile(public_id=profile_public_id)[
                 "profile_urn"
             ]
+            # Returns string of the form 'urn:li:fs_miniProfile:ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w'
             # We extract the last part of the string
             profile_urn = profile_urn_string.split(":")[-1]
-            profile_urn = f"urn:li:fsd_profile:{profile_urn_string}"
-
-        if not profile_urn.startswith("urn:li:fsd_profile:"):
-            profile_urn = f"urn:li:fsd_profile:{profile_urn}"
 
         payload = {
-            "invitee": {"inviteeUnion": {"memberProfile": f"{profile_urn}"}},
+            "invitee": {
+                "inviteeUnion": {"memberProfile": f"urn:li:fsd_profile:{profile_urn}"}
+            },
+            "customMessage": message,
         }
+        params = {
+            "action": "verifyQuotaAndCreateV2",
+            "decorationId": "com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2",
+        }
+
         res = self._post(
-            "/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2",
+            "/voyagerRelationshipsDashMemberRelationships",
             data=json.dumps(payload),
             headers={"accept": "application/vnd.linkedin.normalized+json+2.1"},
+            params=params,
         )
-
-        print('add_connection status code:', res.status_code)
-        return res.status_code != 200
+        # Check for connection_response.status_code == 400 and connection_response.json().get('data', {}).get('code') == 'CANT_RESEND_YET'
+        # If above condition is True then request has been already sent, (might be pending or already connected)
+        print('status code:', res.status_code)
+        if res.status_code == 429:
+            return 429
+        if res.ok:
+            return False
+        else:
+            return True
 
     def remove_connection(self, public_profile_id):
         """Remove a given profile as a connection.

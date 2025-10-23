@@ -799,8 +799,220 @@ class Linkedin(object):
 
         return contact_info
 
+    def get_profile_contact_info_graphql(self, public_id=None, urn_id=None, include_web_metadata=True):
+        """Fetch contact information for a given LinkedIn profile using GraphQL API.
+
+        :param public_id: LinkedIn public ID for a profile (e.g., 'johndinsmore1')
+        :type public_id: str, optional
+        :param urn_id: LinkedIn URN ID for a profile (will fetch public_id if provided)
+        :type urn_id: str, optional
+        :param include_web_metadata: Include web metadata in the response
+        :type include_web_metadata: bool, optional
+
+        :return: Contact data
+        :rtype: dict
+        """
+        print(f"=== get_profile_contact_info_graphql called with public_id={public_id}, urn_id={urn_id} ===")
+        
+        # If urn_id is provided but not public_id, fetch the profile to get public_id
+        if urn_id and not public_id:
+            profile = self.get_profile(urn_id=urn_id)
+            public_id = profile.get("public_id")
+            if not public_id:
+                raise ValueError(f"Could not retrieve public_id for urn_id: {urn_id}")
+        
+        if not public_id:
+            raise ValueError("Either public_id or urn_id is required for get_profile_contact_info_graphql")
+
+        # GraphQL query ID for profile contact info
+        query_id = "voyagerIdentityDashProfiles.c7452e58fa37646d09dae4920fc5b4b9"
+        
+        # Build the variables string
+        variables = f"(memberIdentity:{public_id})"
+        
+        # Construct the query string manually - LinkedIn expects it exactly as shown
+        include_metadata = "true" if include_web_metadata else "false"
+        query_string = f"includeWebMetadata={include_metadata}&variables={variables}&queryId={query_id}"
+        full_url = f"/graphql?{query_string}"
+        
+        logger.info(f"Fetching contact info for public_id: {public_id}")
+        logger.info(f"Full URL: {full_url}")
+        
+        # Generate a page instance ID for contact details page
+        random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
+        page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+        page_instance = f"urn:li:page:d_flagship3_profile_view_base_contact_details;{page_instance_id}"
+        
+        # Add required headers for GraphQL endpoint
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+            "referer": f"https://www.linkedin.com/in/{public_id}/",
+            "x-li-page-instance": page_instance,
+            "x-li-track": '{"clientVersion":"1.13.39992","mpVersion":"1.13.39992","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
+        }
+        
+        try:
+            res = self._fetch(full_url, headers=headers)
+            print(f"Response status: {res.status_code}")
+            data = res.json()
+            print(f"Response data keys: {data.keys()}")
+        except Exception as e:
+            print(f"!!! Error fetching contact info GraphQL: {e}")
+            print(f"!!! URL: {full_url}")
+            logger.error(f"Error fetching contact info GraphQL: {e}")
+            logger.error(f"URL: {full_url}")
+            raise
+        
+        # Debug: Log the response structure
+        logger.debug(f"GraphQL contact info response keys: {data.keys()}")
+        if "errors" in data:
+            print(f"!!! GraphQL errors found: {data['errors']}")
+            logger.error(f"GraphQL errors: {data['errors']}")
+            raise Exception(f"GraphQL returned errors: {data['errors']}")
+        
+        # Parse the GraphQL response to extract contact info
+        # The profile data is in the 'included' array with type Profile
+        contact_info = {}
+        
+        included = data.get("included", [])
+        logger.debug(f"Number of included items: {len(included)}")
+        
+        # Find the Profile object in the included array
+        profile_data = None
+        for item in included:
+            if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.Profile":
+                profile_data = item
+                break
+        
+        if profile_data:
+            # Extract basic profile info
+            first_name = profile_data.get("firstName")
+            if first_name:
+                contact_info["first_name"] = first_name
+            
+            last_name = profile_data.get("lastName")
+            if last_name:
+                contact_info["last_name"] = last_name
+            
+            public_identifier = profile_data.get("publicIdentifier")
+            if public_identifier:
+                contact_info["public_identifier"] = public_identifier
+            
+            headline = profile_data.get("headline")
+            if headline:
+                contact_info["headline"] = headline
+            
+            # Extract profile picture
+            profile_picture = profile_data.get("profilePicture")
+            if profile_picture:
+                # Get the display image reference (without frame)
+                display_image_ref = profile_picture.get("displayImageReferenceResolutionResult", {})
+                vector_image = display_image_ref.get("vectorImage")
+                
+                if vector_image:
+                    root_url = vector_image.get("rootUrl", "")
+                    artifacts = vector_image.get("artifacts", [])
+                    
+                    # Build image URLs for different sizes
+                    images = {}
+                    for artifact in artifacts:
+                        width = artifact.get("width")
+                        file_segment = artifact.get("fileIdentifyingUrlPathSegment")
+                        if width and file_segment:
+                            images[f"{width}x{width}"] = f"{root_url}{file_segment}"
+                    
+                    if images:
+                        contact_info["profile_picture"] = {
+                            "root_url": root_url,
+                            "images": images
+                        }
+            
+            # Extract email
+            email_obj = profile_data.get("emailAddress", {})
+            if email_obj and isinstance(email_obj, dict):
+                email = email_obj.get("emailAddress")
+                if email:
+                    contact_info["email_address"] = email
+            
+            # Extract websites
+            websites = profile_data.get("websites", [])
+            if websites:
+                # Parse website objects to match JavaScript parser expectations
+                parsed_websites = []
+                for site in websites:
+                    website_obj = {
+                        "url": site.get("url"),
+                        # JS parser expects 'type' or 'label', map category to type
+                        "type": site.get("category") or site.get("label") or "OTHER",
+                    }
+                    # Also include label if present for backward compatibility
+                    if site.get("label"):
+                        website_obj["label"] = site.get("label")
+                    parsed_websites.append(website_obj)
+                contact_info["websites"] = parsed_websites
+            
+            # Extract twitter handles
+            twitter_handles = profile_data.get("twitterHandles", [])
+            if twitter_handles:
+                # Parse to match JavaScript parser expectations (expects objects with 'name' property)
+                parsed_twitter = []
+                for handle in twitter_handles:
+                    twitter_obj = {
+                        "name": handle.get("name") or handle.get("credentialId")
+                    }
+                    if twitter_obj["name"]:
+                        parsed_twitter.append(twitter_obj)
+                if parsed_twitter:
+                    contact_info["twitter"] = parsed_twitter
+            
+            # Extract birthdate
+            birthdate = profile_data.get("birthDateOn")
+            if birthdate:
+                # Clean up birthdate - remove GraphQL metadata, keep only month and day
+                contact_info["birthdate"] = {
+                    "month": birthdate.get("month"),
+                    "day": birthdate.get("day")
+                }
+            
+            # Extract phone numbers
+            phone_numbers = profile_data.get("phoneNumbers", [])
+            if phone_numbers:
+                # Parse phone number objects
+                parsed_phones = []
+                for phone in phone_numbers:
+                    phone_obj = phone.get("phoneNumber", {})
+                    if phone_obj:
+                        parsed_phones.append({
+                            "number": phone_obj.get("number"),
+                            "type": phone.get("type")
+                        })
+                contact_info["phone_numbers"] = parsed_phones
+            
+            # Extract instant messengers
+            ims = profile_data.get("instantMessengers", [])
+            if ims:
+                # Parse to match JavaScript parser expectations (expects 'provider' and 'name')
+                parsed_ims = []
+                for im in ims:
+                    im_obj = {
+                        "provider": im.get("provider"),
+                        "name": im.get("id")  # LinkedIn uses 'id' field for the handle
+                    }
+                    if im_obj["provider"] and im_obj["name"]:
+                        parsed_ims.append(im_obj)
+                if parsed_ims:
+                    contact_info["ims"] = parsed_ims
+            
+            # Extract address if present
+            address = profile_data.get("address")
+            if address:
+                contact_info["address"] = address
+        
+        return contact_info
+
     def get_profile_skills(self, public_id=None, urn_id=None):
-        """Fetch the skills listed on a given LinkedIn profile.
+        """Fetch the skills listed on a given LinkedIn profile (LEGACY - kept for reference).
 
         :param public_id: LinkedIn public ID for a profile
         :type public_id: str, optional
@@ -823,8 +1035,507 @@ class Linkedin(object):
 
         return skills
 
+    def get_profile_skills_graphql(self, urn_id=None, locale="en_US"):
+        """Fetch the skills listed on a given LinkedIn profile using GraphQL API.
+
+        :param urn_id: LinkedIn URN ID for a profile (e.g., 'ACoAAAZ_m9sBjNJI6ZqXy2dacAAipjGGjPQEAZY')
+        :type urn_id: str
+        :param locale: Locale for the response (default: en_US)
+        :type locale: str, optional
+
+        :return: Skills data from GraphQL response
+        :rtype: dict
+        """
+        if not urn_id:
+            raise ValueError("urn_id is required for get_profile_skills_graphql")
+
+        # Construct the full profile URN - ensure it has the proper format
+        if not urn_id.startswith("urn:li:fsd_profile:"):
+            profile_urn = f"urn:li:fsd_profile:{urn_id}"
+        else:
+            profile_urn = urn_id
+        
+        # Build the variables string exactly as LinkedIn expects
+        # Note: sectionType and locale appear to be string literals without quotes in the GraphQL query
+        variables = f"(profileUrn:{profile_urn},sectionType:skills,locale:{locale})"
+        
+        # GraphQL query ID for profile components
+        # Note: This queryId may need to be updated periodically as LinkedIn changes their API
+        # The queryId can be found by inspecting network requests in the browser when viewing a profile's skills section
+        query_id = "voyagerIdentityDashProfileComponents.c5d4db426a0f8247b8ab7bc1d660775a"
+        
+        # Try alternative query IDs if the primary one fails
+        # These are common variations that LinkedIn uses
+        alternative_query_ids = [
+            "voyagerIdentityDashProfileComponents.c5d4db426a0f8247b8ab7bc1d660775a",
+            "voyagerIdentityDashProfileComponents.d6d4db426a0f8247b8ab7bc1d660775a",
+        ]
+        
+        # Construct the query string manually (like search_typeahead does)
+        # This ensures proper URL encoding that LinkedIn expects
+        # We need to URL-encode the URN colons but keep the parentheses and commas unencoded
+        # Encode only the URN part (the colons need to be %3A)
+        encoded_urn = profile_urn.replace(":", "%3A")
+        encoded_variables = f"(profileUrn:{encoded_urn},sectionType:skills,locale:{locale})"
+        query_string = f"variables={encoded_variables}&queryId={query_id}"
+        full_url = f"/graphql?{query_string}"
+        
+        # Generate a page instance ID (LinkedIn uses this to track page context)
+        # Format: urn:li:page:d_flagship3_profile_view_base_skills_details;{random_id}
+        random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
+        page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+        page_instance = f"urn:li:page:d_flagship3_profile_view_base_skills_details;{page_instance_id}"
+        
+        # Add required headers for GraphQL endpoint
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+            "referer": f"https://www.linkedin.com/in/{urn_id}/details/skills/",
+            "x-li-page-instance": page_instance,
+            "x-li-pem-metadata": "Voyager - Profile=view-skills-details",
+            "x-li-track": '{"clientVersion":"1.13.39992","mpVersion":"1.13.39992","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
+        }
+        
+        res = self._fetch(full_url, headers=headers)
+        data = res.json()
+        
+        # Parse the GraphQL response to extract skills in a format similar to the legacy endpoint
+        skills = []
+        
+        # The skills data is in the 'included' array
+        included = data.get("included", [])
+        
+        # First, build a map of entityUrn to endorsement data from EndorsedSkill objects
+        endorsed_skills_map = {}
+        for item in included:
+            if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.EndorsedSkill":
+                entity_urn = item.get("entityUrn")
+                if entity_urn:
+                    endorsed_skills_map[entity_urn] = {
+                        "endorsementCount": item.get("endorsementCount", 0),
+                        "endorsedByViewer": item.get("endorsedByViewer", False)
+                    }
+        
+        # Now extract skills from PagedListComponent
+        for item in included:
+            # Look for PagedListComponent items which contain the skills
+            if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.tetris.PagedListComponent":
+                components = item.get("components", {})
+                elements = components.get("elements", [])
+                
+                for element in elements:
+                    # Each element contains an entityComponent with the skill details
+                    entity_component = element.get("components", {}).get("entityComponent", {})
+                    
+                    if entity_component:
+                        # Extract the skill name from titleV2
+                        title_v2 = entity_component.get("titleV2", {})
+                        text_obj = title_v2.get("text", {})
+                        skill_name = text_obj.get("text")
+                        
+                        if skill_name:
+                            skill_obj = {"name": skill_name}
+                            
+                            # Try to find the entityUrn from the action component
+                            entity_urn = None
+                            sub_components = entity_component.get("subComponents", {})
+                            sub_component_list = sub_components.get("components", [])
+                            
+                            for sub_comp in sub_component_list:
+                                action_comp = sub_comp.get("components", {}).get("actionComponent", {})
+                                if action_comp:
+                                    action = action_comp.get("action", {})
+                                    endorsed_skill_action = action.get("endorsedSkillAction", {})
+                                    if endorsed_skill_action:
+                                        # Extract the URN reference (starts with *)
+                                        entity_urn = endorsed_skill_action.get("*endorsedSkill")
+                                        break
+                            
+                            # Add entityUrn if found
+                            if entity_urn:
+                                skill_obj["entityUrn"] = entity_urn
+                                
+                                # Get endorsement data from the map
+                                if entity_urn in endorsed_skills_map:
+                                    skill_obj["numEndorsements"] = endorsed_skills_map[entity_urn]["endorsementCount"]
+                                    skill_obj["endorsedByViewer"] = endorsed_skills_map[entity_urn]["endorsedByViewer"]
+                                else:
+                                    skill_obj["numEndorsements"] = 0
+                            else:
+                                skill_obj["numEndorsements"] = 0
+                            
+                            skills.append(skill_obj)
+        
+        return skills
+
+    def get_profile_graphql(self, public_id=None, urn_id=None):
+        """Fetch full profile data using GraphQL API (modern approach).
+
+        :param public_id: LinkedIn public ID for a profile
+        :type public_id: str, optional
+        :param urn_id: LinkedIn URN ID for a profile (e.g., 'ACoAAAS7RzQB5MFgx7URQOOa7dShFKQhfdIWxms')
+        :type urn_id: str, optional
+
+        :return: Profile data
+        :rtype: dict
+        """
+        if not public_id and not urn_id:
+            raise ValueError("Either public_id or urn_id is required")
+
+        # Construct the profile URN
+        if urn_id:
+            if not urn_id.startswith("urn:li:fsd_profile:"):
+                profile_urn = f"urn:li:fsd_profile:{urn_id}"
+            else:
+                profile_urn = urn_id
+        else:
+            # If only public_id is provided, we need to get the URN first
+            legacy_profile = self.get_profile(public_id=public_id)
+            profile_urn = legacy_profile.get("profile_urn")
+            if not profile_urn:
+                raise ValueError(f"Could not retrieve profile URN for public_id: {public_id}")
+
+        # GraphQL decoration ID for full profile
+        decoration_id = "com.linkedin.voyager.dash.deco.identity.profile.FullProfile-76"
+        
+        # Construct the URL
+        full_url = f"/identity/dash/profiles/{profile_urn}?decorationId={decoration_id}"
+        
+        # Generate a page instance ID
+        random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
+        page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+        page_instance = f"urn:li:page:d_flagship3_profile_view_base;{page_instance_id}"
+        
+        # Add required headers
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+            "x-li-page-instance": page_instance,
+            "x-li-track": '{"clientVersion":"1.13.40037","mpVersion":"1.13.40037","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
+            "x-li-lang": "en_US",
+            "x-li-deco-include-micro-schema": "true",
+        }
+        
+        res = self._fetch(full_url, headers=headers)
+        data = res.json()
+        
+        # Extract the main profile data
+        profile_data = data.get("data", {})
+        
+        # Parse and clean up the profile data
+        profile = {}
+        
+        # Basic info
+        if profile_data.get("firstName"):
+            profile["first_name"] = profile_data["firstName"]
+        if profile_data.get("lastName"):
+            profile["last_name"] = profile_data["lastName"]
+        if profile_data.get("headline"):
+            profile["headline"] = profile_data["headline"]
+        if profile_data.get("summary"):
+            profile["summary"] = profile_data["summary"]
+        if profile_data.get("publicIdentifier"):
+            profile["public_identifier"] = profile_data["publicIdentifier"]
+        if profile_data.get("entityUrn"):
+            profile["profile_urn"] = profile_data["entityUrn"]
+        if profile_data.get("objectUrn"):
+            profile["member_urn"] = profile_data["objectUrn"]
+        if profile_data.get("trackingId"):
+            profile["tracking_id"] = profile_data["trackingId"]
+        
+        # Premium status
+        profile["premium"] = profile_data.get("premium", False)
+        profile["show_premium_badge"] = profile_data.get("showPremiumSubscriberBadge", False)
+        
+        # Location
+        location = profile_data.get("location", {})
+        if location:
+            profile["location"] = {
+                "country_code": location.get("countryCode"),
+                "postal_code": location.get("postalCode")
+            }
+        
+        geo_location = profile_data.get("geoLocation", {})
+        if geo_location:
+            profile["geo_location"] = {
+                "geo_urn": geo_location.get("geoUrn"),
+                "postal_code": geo_location.get("postalCode")
+            }
+        
+        # Profile picture
+        profile_picture = profile_data.get("profilePicture", {})
+        if profile_picture:
+            display_image_ref = profile_picture.get("displayImageReference", {})
+            vector_image = display_image_ref.get("vectorImage")
+            
+            if vector_image:
+                root_url = vector_image.get("rootUrl", "")
+                artifacts = vector_image.get("artifacts", [])
+                
+                images = {}
+                for artifact in artifacts:
+                    width = artifact.get("width")
+                    file_segment = artifact.get("fileIdentifyingUrlPathSegment")
+                    if width and file_segment:
+                        images[f"{width}x{width}"] = f"{root_url}{file_segment}"
+                
+                if images:
+                    profile["profile_picture"] = {
+                        "root_url": root_url,
+                        "images": images
+                    }
+        
+        # Background picture
+        background_picture = profile_data.get("backgroundPicture", {})
+        if background_picture:
+            display_image_ref = background_picture.get("displayImageReference", {})
+            vector_image = display_image_ref.get("vectorImage")
+            
+            if vector_image:
+                root_url = vector_image.get("rootUrl", "")
+                artifacts = vector_image.get("artifacts", [])
+                
+                images = {}
+                for artifact in artifacts:
+                    width = artifact.get("width")
+                    file_segment = artifact.get("fileIdentifyingUrlPathSegment")
+                    if width and file_segment:
+                        images[f"{width}x{width}"] = f"{root_url}{file_segment}"
+                
+                if images:
+                    profile["background_picture"] = {
+                        "root_url": root_url,
+                        "images": images
+                    }
+        
+        # Industry
+        if profile_data.get("industryUrn"):
+            profile["industry_urn"] = profile_data["industryUrn"]
+        
+        # Birthdate
+        birthdate = profile_data.get("birthDateOn")
+        if birthdate:
+            profile["birthdate"] = {
+                "month": birthdate.get("month"),
+                "day": birthdate.get("day"),
+                "year": birthdate.get("year")
+            }
+        
+        return profile
+
+    def get_available_profile_cards(self, profile_urn, locale="en_US"):
+        """Get list of available profile cards for a profile.
+        
+        This is a lightweight method that returns only the card URNs without
+        fetching the full card data.
+        
+        :param profile_urn: LinkedIn profile URN
+        :type profile_urn: str
+        :param locale: Locale for the card (default: 'en_US')
+        :type locale: str, optional
+        
+        :return: List of available card types
+        :rtype: list
+        """
+        try:
+            response = self.get_profile_card(profile_urn, card_type=None, locale=locale)
+            data = response.get('data', {}).get('data', {})
+            card_elements = data.get('identityDashProfileCardsByDeferredCards', {}).get('*elements', [])
+            
+            available_cards = []
+            for urn in card_elements:
+                # Extract card type from URN like "urn:li:fsd_profileCard:(ID,CARD_TYPE,locale)"
+                parts = urn.split(',')
+                if len(parts) >= 2:
+                    available_cards.append(parts[1])
+            
+            return available_cards
+        except Exception as e:
+            self.logger.error(f"Failed to get available profile cards: {e}")
+            return []
+    
+    def get_profile_card(self, profile_urn, card_type=None, locale="en_US"):
+        """Fetch profile cards (sections) using GraphQL API.
+        
+        This method fetches detailed data for profile sections like
+        EXPERIENCE, EDUCATION, LICENSES_AND_CERTIFICATIONS, etc.
+        
+        :param profile_urn: LinkedIn profile URN (e.g., 'ACoAAAvf7-UBk_8MvFoDYosW9PdYq24NTpjzHQA')
+        :type profile_urn: str
+        :param card_type: Type of card to fetch (optional - if None, fetches all cards)
+        :type card_type: str, optional
+        :param locale: Locale for the card (default: 'en_US')
+        :type locale: str, optional
+        
+        :return: Profile card data
+        :rtype: dict
+        
+        Available card types:
+        - EXPERIENCE: Work history
+        - EDUCATION: Education history
+        - LICENSES_AND_CERTIFICATIONS: Certifications
+        - SKILLS: Skills
+        - PROJECTS: Projects
+        - VOLUNTEERING_EXPERIENCE: Volunteer work
+        - PUBLICATIONS: Publications
+        - PATENTS: Patents
+        - COURSES: Courses
+        - HONORS_AND_AWARDS: Honors and awards
+        - TEST_SCORES: Test scores
+        - LANGUAGES: Languages
+        - ORGANIZATIONS: Organizations
+        - RECOMMENDATIONS: Recommendations
+        - ABOUT: About section
+        - HIGHLIGHTS: Highlights
+        - FEATURED: Featured content
+        - SERVICES: Services
+        - INTERESTS: Interests
+        """
+        # Clean profile_urn if it doesn't include the full URN prefix
+        if not profile_urn.startswith("urn:li:fsd_profile:"):
+            profile_urn = f"urn:li:fsd_profile:{profile_urn}"
+        
+        # GraphQL queryId for profile cards
+        query_id = "voyagerIdentityDashProfileCards.2bdab365ea61cd6af00b57e0183430c3"
+        
+        # Construct the GraphQL URL with proper URL encoding
+        # LinkedIn expects the URN to be URL-encoded in the variables parameter
+        import urllib.parse
+        encoded_urn = urllib.parse.quote(profile_urn, safe='')
+        variables = f"(profileUrn:{encoded_urn})"
+        full_url = f"/graphql?includeWebMetadata=true&variables={variables}&queryId={query_id}"
+        
+        # Generate a page instance ID
+        random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
+        page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+        page_instance = f"urn:li:page:d_flagship3_profile_view_base;{page_instance_id}"
+        
+        # Add required headers
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+            "x-li-page-instance": page_instance,
+            "x-li-pem-metadata": "Voyager - Profile=profile-tab-deferred-cards",
+            "x-li-track": '{"clientVersion":"1.13.40037","mpVersion":"1.13.40037","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
+            "x-li-lang": "en_US",
+        }
+        
+        try:
+            res = self._fetch(full_url, headers=headers)
+            data = res.json()
+            
+            # Check if included array is empty (deferred loading)
+            included = data.get('included', [])
+            if not included:
+                self.logger.warning(
+                    "Response has empty 'included' array. LinkedIn is using deferred loading. "
+                    "Card data may need to be fetched separately or with different parameters."
+                )
+                # Add helpful metadata to the response
+                card_elements = data.get('data', {}).get('data', {}).get('identityDashProfileCardsByDeferredCards', {}).get('*elements', [])
+                available_cards = []
+                for urn in card_elements:
+                    parts = urn.split(',')
+                    if len(parts) >= 2:
+                        available_cards.append(parts[1])
+                
+                data['_metadata'] = {
+                    'note': 'Card data not loaded. This endpoint returns only card references.',
+                    'available_cards': available_cards,
+                    'suggestion': 'Use specific profile endpoints like get_profile_skills_graphql() or get_profile_contact_info_graphql()'
+                }
+            
+            # If a specific card_type is requested, filter the response
+            if card_type:
+                return self._filter_profile_card(data, card_type)
+            
+            return data
+        except Exception as e:
+            self.logger.error(f"Failed to fetch profile card: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+    
+    def _filter_profile_card(self, response_data, card_type):
+        """Filter profile cards response to return only the specified card type.
+        
+        :param response_data: Full GraphQL response
+        :type response_data: dict
+        :param card_type: Card type to filter (e.g., 'EXPERIENCE', 'EDUCATION')
+        :type card_type: str
+        
+        :return: Filtered response containing only the specified card
+        :rtype: dict
+        """
+        try:
+            # First check if the card type exists in the available cards
+            data = response_data.get('data', {}).get('data', {})
+            card_elements = data.get('identityDashProfileCardsByDeferredCards', {}).get('*elements', [])
+            
+            # Check if the requested card type is available
+            card_urn_pattern = f",{card_type},"
+            card_exists = any(card_urn_pattern in urn for urn in card_elements)
+            
+            if not card_exists:
+                available_cards = []
+                for urn in card_elements:
+                    # Extract card type from URN like "urn:li:fsd_profileCard:(ID,CARD_TYPE,locale)"
+                    parts = urn.split(',')
+                    if len(parts) >= 2:
+                        available_cards.append(parts[1])
+                
+                self.logger.warning(
+                    f"Card type '{card_type}' not found in response. "
+                    f"Available cards: {', '.join(available_cards)}"
+                )
+                return {
+                    'data': response_data.get('data'),
+                    'included': [],
+                    'error': f"Card type '{card_type}' not available for this profile",
+                    'available_cards': available_cards
+                }
+            
+            # Filter the included array for the specific card and related entities
+            included = response_data.get('included', [])
+            filtered_card = None
+            related_entities = []
+            
+            for item in included:
+                entity_urn = item.get('entityUrn', '')
+                item_type = item.get('$type', '')
+                
+                # Check if this is the card we're looking for
+                if item_type == 'com.linkedin.voyager.dash.identity.profile.tetris.Card' and card_urn_pattern in entity_urn:
+                    filtered_card = item
+                # Keep related entities (companies, schools, etc.)
+                elif item_type in [
+                    'com.linkedin.voyager.dash.organization.Company',
+                    'com.linkedin.voyager.dash.organization.School',
+                    'com.linkedin.voyager.dash.social.SocialDetail',
+                    'com.linkedin.voyager.dash.relationships.MemberRelationship'
+                ]:
+                    related_entities.append(item)
+            
+            if filtered_card:
+                return {
+                    'data': response_data.get('data'),
+                    'included': [filtered_card] + related_entities
+                }
+            else:
+                # Card exists in URN list but not in included array (might not be expanded yet)
+                return {
+                    'data': response_data.get('data'),
+                    'included': related_entities,
+                    'note': f"Card '{card_type}' exists but data not fully loaded. Try fetching all cards first."
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error filtering profile card: {e}")
+            return response_data
+
+    """ @deprecated """
     def get_profile(self, public_id=None, urn_id=None):
-        """Fetch data for a given LinkedIn profile.
+        """Fetch data for a given LinkedIn profile (LEGACY).
 
         :param public_id: LinkedIn public ID for a profile
         :type public_id: str, optional
@@ -838,7 +1549,7 @@ class Linkedin(object):
         # https://www.linkedin.com/voyager/api/identity/profiles/ACoAAAKT9JQBsH7LwKaE9Myay9WcX8OVGuDq9Uw
 
         res = self._fetch(f"/identity/profiles/{public_id or urn_id}/profileView")
-
+        
         data = res.json()
         if data and "status" in data and data["status"] != 200:
             self.logger.info("request failed: {}".format(data["message"]))
@@ -1426,6 +2137,9 @@ class Linkedin(object):
         # Check for connection_response.status_code == 400 and connection_response.json().get('data', {}).get('code') == 'CANT_RESEND_YET'
         # If above condition is True then request has been already sent, (might be pending or already connected)
         print('status code:', res.status_code)
+        # 406 means already sent request so we return false because not an error 
+        if res.status_code == 406:
+            return False
         if res.status_code == 429:
             return 429
         if res.ok:

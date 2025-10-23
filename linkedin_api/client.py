@@ -28,7 +28,7 @@ class Client(object):
             [
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                 "AppleWebKit/537.36 (KHTML, like Gecko)",
-                "Chrome/128.0.0.0 Safari/537.36",
+                "Chrome/134.0.6998.118 Safari/537.36",
             ]
         ),
         "accept-language": "en-US,en;q=0.9",

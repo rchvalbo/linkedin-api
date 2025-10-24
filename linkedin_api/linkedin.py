@@ -6,6 +6,7 @@ from http.client import HTTPException
 import json
 import logging
 import random
+import traceback
 import uuid
 from operator import itemgetter
 from time import sleep, time
@@ -136,10 +137,9 @@ class Linkedin(object):
         if urn_id:
             profile_urn = f"urn:li:fsd_profile:{urn_id}"
         else:
+            # Use get_profile to get profile URN
             profile = self.get_profile(public_id=public_id)
-            profile_urn = profile["profile_urn"].replace(
-                "fs_miniProfile", "fsd_profile"
-            )
+            profile_urn = profile.get("profile_urn") or f"urn:li:fsd_profile:{profile.get('entityUrn', '').split(':')[-1]}"
         url_params["profileUrn"] = profile_urn
         url = f"/identity/profileUpdatesV2"
         res = self._fetch(url, params=url_params)
@@ -756,51 +756,8 @@ class Linkedin(object):
             # Return the search results
         return search_results
 
-
-    def get_profile_contact_info(self, public_id=None, urn_id=None):
-        """Fetch contact information for a given LinkedIn profile. Pass a [public_id] or a [urn_id].
-
-        :param public_id: LinkedIn public ID for a profile
-        :type public_id: str, optional
-        :param urn_id: LinkedIn URN ID for a profile
-        :type urn_id: str, optional
-
-        :return: Contact data
-        :rtype: dict
-        """
-        res = self._fetch(
-            f"/identity/profiles/{public_id or urn_id}/profileContactInfo"
-        )
-        data = res.json()
-
-        contact_info = {
-            "email_address": data.get("emailAddress"),
-            "websites": [],
-            "twitter": data.get("twitterHandles"),
-            "birthdate": data.get("birthDateOn"),
-            "ims": data.get("ims"),
-            "phone_numbers": data.get("phoneNumbers", []),
-        }
-
-        websites = data.get("websites", [])
-        for item in websites:
-            if "com.linkedin.voyager.identity.profile.StandardWebsite" in item["type"]:
-                item["label"] = item["type"][
-                    "com.linkedin.voyager.identity.profile.StandardWebsite"
-                ]["category"]
-            elif "" in item["type"]:
-                item["label"] = item["type"][
-                    "com.linkedin.voyager.identity.profile.CustomWebsite"
-                ]["label"]
-
-            del item["type"]
-
-        contact_info["websites"] = websites
-
-        return contact_info
-
-    def get_profile_contact_info_graphql(self, public_id=None, urn_id=None, include_web_metadata=True):
-        """Fetch contact information for a given LinkedIn profile using GraphQL API.
+    def get_profile_contact_info(self, public_id=None, urn_id=None, include_web_metadata=True):
+        """Fetch contact information for a given LinkedIn profile.
 
         :param public_id: LinkedIn public ID for a profile (e.g., 'johndinsmore1')
         :type public_id: str, optional
@@ -812,17 +769,17 @@ class Linkedin(object):
         :return: Contact data
         :rtype: dict
         """
-        print(f"=== get_profile_contact_info_graphql called with public_id={public_id}, urn_id={urn_id} ===")
+        print(f"=== get_profile_contact_info called with public_id={public_id}, urn_id={urn_id} ===")
         
         # If urn_id is provided but not public_id, fetch the profile to get public_id
         if urn_id and not public_id:
             profile = self.get_profile(urn_id=urn_id)
-            public_id = profile.get("public_id")
+            public_id = profile.get("public_identifier")
             if not public_id:
                 raise ValueError(f"Could not retrieve public_id for urn_id: {urn_id}")
         
         if not public_id:
-            raise ValueError("Either public_id or urn_id is required for get_profile_contact_info_graphql")
+            raise ValueError("Either public_id or urn_id is required for get_profile_contact_info")
 
         # GraphQL query ID for profile contact info
         query_id = "voyagerIdentityDashProfiles.c7452e58fa37646d09dae4920fc5b4b9"
@@ -1011,32 +968,8 @@ class Linkedin(object):
         
         return contact_info
 
-    def get_profile_skills(self, public_id=None, urn_id=None):
-        """Fetch the skills listed on a given LinkedIn profile (LEGACY - kept for reference).
-
-        :param public_id: LinkedIn public ID for a profile
-        :type public_id: str, optional
-        :param urn_id: LinkedIn URN ID for a profile
-        :type urn_id: str, optional
-
-
-        :return: List of skill objects
-        :rtype: list
-        """
-        params = {"count": 100, "start": 0}
-        res = self._fetch(
-            f"/identity/profiles/{public_id or urn_id}/skills", params=params
-        )
-        data = res.json()
-
-        skills = data.get("elements", [])
-        for item in skills:
-            del item["entityUrn"]
-
-        return skills
-
-    def get_profile_skills_graphql(self, urn_id=None, locale="en_US"):
-        """Fetch the skills listed on a given LinkedIn profile using GraphQL API.
+    def get_profile_skills(self, urn_id=None, locale="en_US"):
+        """Fetch the skills listed on a given LinkedIn profile.
 
         :param urn_id: LinkedIn URN ID for a profile (e.g., 'ACoAAAZ_m9sBjNJI6ZqXy2dacAAipjGGjPQEAZY')
         :type urn_id: str
@@ -1047,7 +980,7 @@ class Linkedin(object):
         :rtype: dict
         """
         if not urn_id:
-            raise ValueError("urn_id is required for get_profile_skills_graphql")
+            raise ValueError("urn_id is required for get_profile_skills")
 
         # Construct the full profile URN - ensure it has the proper format
         if not urn_id.startswith("urn:li:fsd_profile:"):
@@ -1168,15 +1101,22 @@ class Linkedin(object):
         
         return skills
 
-    def get_profile_graphql(self, public_id=None, urn_id=None):
-        """Fetch full profile data using GraphQL API (modern approach).
+    def get_profile(self, public_id=None, urn_id=None):
+        """Fetch full profile data.
+        
+        NOTE: This endpoint returns basic profile information only.
+        For complete work experience and education data, use:
+        - get_profile_experience() for work history with company names, dates, descriptions
+        - get_profile_education() for education history with schools, degrees, dates
+        
+        This method is useful for getting profile metadata, location, pictures, etc.
 
         :param public_id: LinkedIn public ID for a profile
         :type public_id: str, optional
         :param urn_id: LinkedIn URN ID for a profile (e.g., 'ACoAAAS7RzQB5MFgx7URQOOa7dShFKQhfdIWxms')
         :type urn_id: str, optional
 
-        :return: Profile data
+        :return: Profile data (basic info, location, pictures, industry)
         :rtype: dict
         """
         if not public_id and not urn_id:
@@ -1189,11 +1129,12 @@ class Linkedin(object):
             else:
                 profile_urn = urn_id
         else:
-            # If only public_id is provided, we need to get the URN first
-            legacy_profile = self.get_profile(public_id=public_id)
-            profile_urn = legacy_profile.get("profile_urn")
-            if not profile_urn:
-                raise ValueError(f"Could not retrieve profile URN for public_id: {public_id}")
+            # If only public_id is provided, urn_id is required
+            # Users should search for the profile first to get the URN, or use the profile URL to extract it
+            raise ValueError(
+                f"urn_id is required when public_id is provided. "
+                f"Use search_people() to find the URN for public_id: {public_id}"
+            )
 
         # GraphQL decoration ID for full profile
         decoration_id = "com.linkedin.voyager.dash.deco.identity.profile.FullProfile-76"
@@ -1257,10 +1198,22 @@ class Linkedin(object):
         
         geo_location = profile_data.get("geoLocation", {})
         if geo_location:
+            geo_urn = geo_location.get("geoUrn")
             profile["geo_location"] = {
-                "geo_urn": geo_location.get("geoUrn"),
+                "geo_urn": geo_urn,
                 "postal_code": geo_location.get("postalCode")
             }
+            
+            # Try to find location name in included array
+            if geo_urn:
+                included = data.get("included", [])
+                for item in included:
+                    if item.get("entityUrn") == geo_urn:
+                        if item.get("defaultLocalizedName"):
+                            profile["geo_location"]["name"] = item.get("defaultLocalizedName")
+                        if item.get("defaultLocalizedNameWithoutCountryName"):
+                            profile["geo_location"]["name_without_country"] = item.get("defaultLocalizedNameWithoutCountryName")
+                        break
         
         # Profile picture
         profile_picture = profile_data.get("profilePicture", {})
@@ -1311,6 +1264,13 @@ class Linkedin(object):
         # Industry
         if profile_data.get("industryUrn"):
             profile["industry_urn"] = profile_data["industryUrn"]
+            
+            # Try to find industry name in included array
+            included = data.get("included", [])
+            for item in included:
+                if item.get("entityUrn") == profile_data["industryUrn"]:
+                    profile["industry_name"] = item.get("name")
+                    break
         
         # Birthdate
         birthdate = profile_data.get("birthDateOn")
@@ -1323,332 +1283,115 @@ class Linkedin(object):
         
         return profile
 
-    def get_available_profile_cards(self, profile_urn, locale="en_US"):
-        """Get list of available profile cards for a profile.
+    def get_profile_experience(self, profile_urn, locale="en_US", count=20, start=0):
+        """Fetch work experience using ProfileComponents endpoint.
         
-        This is a lightweight method that returns only the card URNs without
-        fetching the full card data.
+        This method retrieves complete work experience data including:
+        - Job titles
+        - Companies with logos
+        - Date ranges
+        - Full job descriptions
+        - Skills per position
         
-        :param profile_urn: LinkedIn profile URN
-        :type profile_urn: str
-        :param locale: Locale for the card (default: 'en_US')
-        :type locale: str, optional
-        
-        :return: List of available card types
-        :rtype: list
-        """
-        try:
-            response = self.get_profile_card(profile_urn, card_type=None, locale=locale)
-            data = response.get('data', {}).get('data', {})
-            card_elements = data.get('identityDashProfileCardsByDeferredCards', {}).get('*elements', [])
-            
-            available_cards = []
-            for urn in card_elements:
-                # Extract card type from URN like "urn:li:fsd_profileCard:(ID,CARD_TYPE,locale)"
-                parts = urn.split(',')
-                if len(parts) >= 2:
-                    available_cards.append(parts[1])
-            
-            return available_cards
-        except Exception as e:
-            self.logger.error(f"Failed to get available profile cards: {e}")
-            return []
-    
-    def get_profile_card(self, profile_urn, card_type=None, locale="en_US"):
-        """Fetch profile cards (sections) using GraphQL API.
-        
-        This method fetches detailed data for profile sections like
-        EXPERIENCE, EDUCATION, LICENSES_AND_CERTIFICATIONS, etc.
+        Supports pagination via count and start parameters.
         
         :param profile_urn: LinkedIn profile URN (e.g., 'ACoAAAvf7-UBk_8MvFoDYosW9PdYq24NTpjzHQA')
         :type profile_urn: str
-        :param card_type: Type of card to fetch (optional - if None, fetches all cards)
-        :type card_type: str, optional
-        :param locale: Locale for the card (default: 'en_US')
+        :param locale: Locale for the response (default: 'en_US')
         :type locale: str, optional
+        :param count: Number of items per page (default: 20)
+        :type count: int, optional
+        :param start: Starting index for pagination (default: 0)
+        :type start: int, optional
         
-        :return: Profile card data
+        :return: Raw experience data (use parse_experience_response to parse)
         :rtype: dict
-        
-        Available card types:
-        - EXPERIENCE: Work history
-        - EDUCATION: Education history
-        - LICENSES_AND_CERTIFICATIONS: Certifications
-        - SKILLS: Skills
-        - PROJECTS: Projects
-        - VOLUNTEERING_EXPERIENCE: Volunteer work
-        - PUBLICATIONS: Publications
-        - PATENTS: Patents
-        - COURSES: Courses
-        - HONORS_AND_AWARDS: Honors and awards
-        - TEST_SCORES: Test scores
-        - LANGUAGES: Languages
-        - ORGANIZATIONS: Organizations
-        - RECOMMENDATIONS: Recommendations
-        - ABOUT: About section
-        - HIGHLIGHTS: Highlights
-        - FEATURED: Featured content
-        - SERVICES: Services
-        - INTERESTS: Interests
         """
-        # Clean profile_urn if it doesn't include the full URN prefix
+        # Clean URN
         if not profile_urn.startswith("urn:li:fsd_profile:"):
             profile_urn = f"urn:li:fsd_profile:{profile_urn}"
         
-        # GraphQL queryId for profile cards
-        query_id = "voyagerIdentityDashProfileCards.2bdab365ea61cd6af00b57e0183430c3"
+        # GraphQL query ID for ProfileComponents
+        query_id = "voyagerIdentityDashProfileComponents.c5d4db426a0f8247b8ab7bc1d660775a"
         
-        # Construct the GraphQL URL with proper URL encoding
-        # LinkedIn expects the URN to be URL-encoded in the variables parameter
-        import urllib.parse
-        encoded_urn = urllib.parse.quote(profile_urn, safe='')
-        variables = f"(profileUrn:{encoded_urn})"
-        full_url = f"/graphql?includeWebMetadata=true&variables={variables}&queryId={query_id}"
+        # URL encode URN
+        encoded_urn = quote(profile_urn, safe='')
         
-        # Generate a page instance ID
-        random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
-        page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
-        page_instance = f"urn:li:page:d_flagship3_profile_view_base;{page_instance_id}"
+        # Build variables with sectionType:experience and pagination
+        variables = f"(profileUrn:{encoded_urn},sectionType:experience,locale:{locale},count:{count},start:{start})"
+        full_url = f"/graphql?variables={variables}&queryId={query_id}"
         
-        # Add required headers
+        # Headers
         headers = {
             "accept": "application/vnd.linkedin.normalized+json+2.1",
             "x-restli-protocol-version": "2.0.0",
-            "x-li-page-instance": page_instance,
-            "x-li-pem-metadata": "Voyager - Profile=profile-tab-deferred-cards",
-            "x-li-track": '{"clientVersion":"1.13.40037","mpVersion":"1.13.40037","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
-            "x-li-lang": "en_US",
         }
         
         try:
             res = self._fetch(full_url, headers=headers)
             data = res.json()
             
-            # Check if included array is empty (deferred loading)
-            included = data.get('included', [])
-            if not included:
-                self.logger.warning(
-                    "Response has empty 'included' array. LinkedIn is using deferred loading. "
-                    "Card data may need to be fetched separately or with different parameters."
-                )
-                # Add helpful metadata to the response
-                card_elements = data.get('data', {}).get('data', {}).get('identityDashProfileCardsByDeferredCards', {}).get('*elements', [])
-                available_cards = []
-                for urn in card_elements:
-                    parts = urn.split(',')
-                    if len(parts) >= 2:
-                        available_cards.append(parts[1])
-                
-                data['_metadata'] = {
-                    'note': 'Card data not loaded. This endpoint returns only card references.',
-                    'available_cards': available_cards,
-                    'suggestion': 'Use specific profile endpoints like get_profile_skills_graphql() or get_profile_contact_info_graphql()'
-                }
-            
-            # If a specific card_type is requested, filter the response
-            if card_type:
-                return self._filter_profile_card(data, card_type)
+            self.logger.info(
+                f"Fetched experience data - Included entities: {len(data.get('included', []))}"
+            )
             
             return data
         except Exception as e:
-            self.logger.error(f"Failed to fetch profile card: {e}")
-            import traceback
+            self.logger.error(f"Failed to fetch profile experience: {e}")
             traceback.print_exc()
             return {}
-    
-    def _filter_profile_card(self, response_data, card_type):
-        """Filter profile cards response to return only the specified card type.
+
+    def get_profile_education(self, profile_urn, locale="en_US"):
+        """Fetch education using ProfileComponents endpoint.
         
-        :param response_data: Full GraphQL response
-        :type response_data: dict
-        :param card_type: Card type to filter (e.g., 'EXPERIENCE', 'EDUCATION')
-        :type card_type: str
+        This method retrieves complete education data including:
+        - Schools
+        - Degrees
+        - Fields of study
+        - Date ranges
+        - Descriptions
         
-        :return: Filtered response containing only the specified card
+        :param profile_urn: LinkedIn profile URN (e.g., 'ACoAAAvf7-UBk_8MvFoDYosW9PdYq24NTpjzHQA')
+        :type profile_urn: str
+        :param locale: Locale for the response (default: 'en_US')
+        :type locale: str, optional
+        
+        :return: Raw education data (use parse_education_response to parse)
         :rtype: dict
         """
+        # Clean URN
+        if not profile_urn.startswith("urn:li:fsd_profile:"):
+            profile_urn = f"urn:li:fsd_profile:{profile_urn}"
+        
+        # GraphQL query ID for ProfileComponents
+        query_id = "voyagerIdentityDashProfileComponents.c5d4db426a0f8247b8ab7bc1d660775a"
+        
+        # URL encode URN
+        encoded_urn = quote(profile_urn, safe='')
+        
+        # Build variables with sectionType:education
+        variables = f"(profileUrn:{encoded_urn},sectionType:education,locale:{locale})"
+        full_url = f"/graphql?variables={variables}&queryId={query_id}"
+        
+        # Headers
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+        }
+        
         try:
-            # First check if the card type exists in the available cards
-            data = response_data.get('data', {}).get('data', {})
-            card_elements = data.get('identityDashProfileCardsByDeferredCards', {}).get('*elements', [])
+            res = self._fetch(full_url, headers=headers)
+            data = res.json()
             
-            # Check if the requested card type is available
-            card_urn_pattern = f",{card_type},"
-            card_exists = any(card_urn_pattern in urn for urn in card_elements)
+            self.logger.info(
+                f"Fetched education data - Included entities: {len(data.get('included', []))}"
+            )
             
-            if not card_exists:
-                available_cards = []
-                for urn in card_elements:
-                    # Extract card type from URN like "urn:li:fsd_profileCard:(ID,CARD_TYPE,locale)"
-                    parts = urn.split(',')
-                    if len(parts) >= 2:
-                        available_cards.append(parts[1])
-                
-                self.logger.warning(
-                    f"Card type '{card_type}' not found in response. "
-                    f"Available cards: {', '.join(available_cards)}"
-                )
-                return {
-                    'data': response_data.get('data'),
-                    'included': [],
-                    'error': f"Card type '{card_type}' not available for this profile",
-                    'available_cards': available_cards
-                }
-            
-            # Filter the included array for the specific card and related entities
-            included = response_data.get('included', [])
-            filtered_card = None
-            related_entities = []
-            
-            for item in included:
-                entity_urn = item.get('entityUrn', '')
-                item_type = item.get('$type', '')
-                
-                # Check if this is the card we're looking for
-                if item_type == 'com.linkedin.voyager.dash.identity.profile.tetris.Card' and card_urn_pattern in entity_urn:
-                    filtered_card = item
-                # Keep related entities (companies, schools, etc.)
-                elif item_type in [
-                    'com.linkedin.voyager.dash.organization.Company',
-                    'com.linkedin.voyager.dash.organization.School',
-                    'com.linkedin.voyager.dash.social.SocialDetail',
-                    'com.linkedin.voyager.dash.relationships.MemberRelationship'
-                ]:
-                    related_entities.append(item)
-            
-            if filtered_card:
-                return {
-                    'data': response_data.get('data'),
-                    'included': [filtered_card] + related_entities
-                }
-            else:
-                # Card exists in URN list but not in included array (might not be expanded yet)
-                return {
-                    'data': response_data.get('data'),
-                    'included': related_entities,
-                    'note': f"Card '{card_type}' exists but data not fully loaded. Try fetching all cards first."
-                }
-                
+            return data
         except Exception as e:
-            self.logger.error(f"Error filtering profile card: {e}")
-            return response_data
-
-    """ @deprecated """
-    def get_profile(self, public_id=None, urn_id=None):
-        """Fetch data for a given LinkedIn profile (LEGACY).
-
-        :param public_id: LinkedIn public ID for a profile
-        :type public_id: str, optional
-        :param urn_id: LinkedIn URN ID for a profile
-        :type urn_id: str, optional
-
-        :return: Profile data
-        :rtype: dict
-        """
-        # NOTE this still works for now, but will probably eventually have to be converted to
-        # https://www.linkedin.com/voyager/api/identity/profiles/ACoAAAKT9JQBsH7LwKaE9Myay9WcX8OVGuDq9Uw
-
-        res = self._fetch(f"/identity/profiles/{public_id or urn_id}/profileView")
-        
-        data = res.json()
-        if data and "status" in data and data["status"] != 200:
-            self.logger.info("request failed: {}".format(data["message"]))
+            self.logger.error(f"Failed to fetch profile education: {e}")
+            traceback.print_exc()
             return {}
-
-        # massage [profile] data
-        profile = data["profile"]
-        if "miniProfile" in profile:
-            if "picture" in profile["miniProfile"]:
-                profile["displayPictureUrl"] = profile["miniProfile"]["picture"][
-                    "com.linkedin.common.VectorImage"
-                ]["rootUrl"]
-
-                images_data = profile["miniProfile"]["picture"][
-                    "com.linkedin.common.VectorImage"
-                ]["artifacts"]
-                for img in images_data:
-                    w, h, url_segment = itemgetter(
-                        "width", "height", "fileIdentifyingUrlPathSegment"
-                    )(img)
-                    profile[f"img_{w}_{h}"] = url_segment
-
-            profile["profile_id"] = get_id_from_urn(profile["miniProfile"]["entityUrn"])
-            profile["profile_urn"] = profile["miniProfile"]["entityUrn"]
-            profile["member_urn"] = profile["miniProfile"]["objectUrn"]
-            profile["public_id"] = profile["miniProfile"]["publicIdentifier"]
-
-            del profile["miniProfile"]
-
-        del profile["defaultLocale"]
-        del profile["supportedLocales"]
-        del profile["versionTag"]
-        del profile["showEducationOnProfileTopCard"]
-
-        # massage [experience] data
-        experience = data["positionView"]["elements"]
-        for item in experience:
-            if "company" in item and "miniCompany" in item["company"]:
-                if "logo" in item["company"]["miniCompany"]:
-                    logo = item["company"]["miniCompany"]["logo"].get(
-                        "com.linkedin.common.VectorImage"
-                    )
-                    if logo:
-                        item["companyLogoUrl"] = logo["rootUrl"]
-                del item["company"]["miniCompany"]
-
-        profile["experience"] = experience
-
-        # massage [education] data
-        education = data["educationView"]["elements"]
-        for item in education:
-            if "school" in item:
-                if "logo" in item["school"]:
-                    item["school"]["logoUrl"] = item["school"]["logo"][
-                        "com.linkedin.common.VectorImage"
-                    ]["rootUrl"]
-                    del item["school"]["logo"]
-
-        profile["education"] = education
-
-        # massage [languages] data
-        languages = data["languageView"]["elements"]
-        for item in languages:
-            del item["entityUrn"]
-        profile["languages"] = languages
-
-        # massage [publications] data
-        publications = data["publicationView"]["elements"]
-        for item in publications:
-            del item["entityUrn"]
-            for author in item.get("authors", []):
-                del author["entityUrn"]
-        profile["publications"] = publications
-
-        # massage [certifications] data
-        certifications = data["certificationView"]["elements"]
-        for item in certifications:
-            del item["entityUrn"]
-        profile["certifications"] = certifications
-
-        # massage [volunteer] data
-        volunteer = data["volunteerExperienceView"]["elements"]
-        for item in volunteer:
-            del item["entityUrn"]
-        profile["volunteer"] = volunteer
-
-        # massage [honors] data
-        honors = data["honorView"]["elements"]
-        for item in honors:
-            del item["entityUrn"]
-        profile["honors"] = honors
-
-        # massage [projects] data
-        projects = data["projectView"]["elements"]
-        for item in projects:
-            del item["entityUrn"]
-        profile["projects"] = projects
-
-        return profile
 
     def get_profile_connections(self, urn_id):
         """Fetch first-degree connections for a given LinkedIn profile.
@@ -1876,6 +1619,7 @@ class Linkedin(object):
         res = self._fetch(f"/organization/companies", params=params)
 
         data = res.json()
+        print('get company data: ', data)
 
         if data and "status" in data and data["status"] != 200:
             self.logger.info("request failed: {}".format(data["message"]))
@@ -1937,7 +1681,6 @@ class Linkedin(object):
         return res.json()
 
     def send_message(self, message_body, conversation_urn_id=None, recipients=None):
-        print('send_message')
         """Send a message to a given conversation.
 
         :param message_body: Message text to send
@@ -2110,12 +1853,11 @@ class Linkedin(object):
             return False
 
         if not profile_urn:
-            profile_urn_string = self.get_profile(public_id=profile_public_id)[
-                "profile_urn"
-            ]
-            # Returns string of the form 'urn:li:fs_miniProfile:ACoAACX1hoMBvWqTY21JGe0z91mnmjmLy9Wen4w'
-            # We extract the last part of the string
-            profile_urn = profile_urn_string.split(":")[-1]
+            # profile_urn is required - cannot be derived from public_id alone
+            raise ValueError(
+                f"profile_urn is required for add_connection. "
+                f"Use search_people() to find the URN for public_id: {profile_public_id}"
+            )
 
         payload = {
             "invitee": {
@@ -2201,8 +1943,11 @@ class Linkedin(object):
         me_profile = self.get_user_profile()
 
         if not target_profile_member_urn_id:
-            profile = self.get_profile(public_id=target_profile_public_id)
-            target_profile_member_urn_id = int(get_id_from_urn(profile["member_urn"]))
+            # target_profile_member_urn_id is required - cannot be derived from public_id alone
+            raise ValueError(
+                f"target_profile_member_urn_id is required for view_profile. "
+                f"Use search_people() or get_profile_network_info() to find the URN for public_id: {target_profile_public_id}"
+            )
 
         if not network_distance:
             profile_network_info = self.get_profile_network_info(

@@ -48,36 +48,6 @@ pip3 install git+https://github.com/tomquirk/linkedin-api.git
 
 > See all methods on the [documentation website](https://linkedin-api.readthedocs.io/).
 
-### 📚 GraphQL API Documentation
-
-**NEW**: Comprehensive documentation for LinkedIn's GraphQL endpoints is now available!
-
-- **[Quick Reference Guide](linkedin_api/docs/QUICK-REFERENCE.md)** - Fast lookup for common tasks
-- **[Complete Documentation](linkedin_api/docs/README-GRAPHQL-ENDPOINTS.md)** - Full endpoint reference
-- **[Profile Cards Endpoint](linkedin_api/docs/graphql-profile-cards-endpoint.md)** - Get all profile sections
-- **[Contact Info Endpoint](linkedin_api/docs/graphql-contact-info-endpoint.md)** - Get contact information
-- **[Professional Info Endpoint](linkedin_api/docs/graphql-professional-info-endpoint.md)** - Get experience, education, certifications
-
-**Quick Example:**
-```python
-from linkedin_api import Linkedin
-
-api = Linkedin('username', 'password')
-
-# Get all profile cards (experience, education, skills, etc.)
-profile_urn = "ACoAAAvf7-UBk_8MvFoDYosW9PdYq24NTpjzHQA"
-all_data = api.get_profile_card(profile_urn)
-
-# Get specific card (e.g., work experience)
-experience = api.get_profile_card(profile_urn, card_type="EXPERIENCE")
-
-# Get contact information
-contact_info = api.get_profile_contact_info_graphql(urn_id=profile_urn)
-
-# Get skills
-skills = api.get_profile_skills_graphql(urn_id=profile_urn)
-```
-
 Below is a basic example of how to use linkedin_api:
 
 ```python

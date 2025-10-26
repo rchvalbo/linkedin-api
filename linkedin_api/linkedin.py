@@ -264,7 +264,6 @@ class Linkedin(object):
             #     return []
             
             data = res.json()
-
             
             data_clusters = data.get("data", []).get("searchDashClustersByAll", [])
 

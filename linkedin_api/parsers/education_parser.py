@@ -69,12 +69,15 @@ def _extract_education_item(element: dict, included: List[dict]) -> Optional[dic
         return None
     
     # Extract basic info
-    degree = _get_nested_text(entity_comp, 'titleV2', 'text', 'text')
+    # NOTE: LinkedIn's GraphQL response has these swapped from what you'd expect:
+    # - titleV2 contains the SCHOOL name (e.g., "Colorado State University Global")
+    # - subtitle contains the DEGREE name (e.g., "Bachelor of Science - BS, MIS")
+    school_name = _get_nested_text(entity_comp, 'titleV2', 'text', 'text')
     date_range = _get_nested_text(entity_comp, 'caption', 'text')
     school_url = entity_comp.get('textActionTarget', '')
     
-    # Extract subtitle (school name)
-    school_name = _get_nested_text(entity_comp, 'subtitle', 'text')
+    # Extract degree from subtitle
+    degree = _get_nested_text(entity_comp, 'subtitle', 'text')
     
     # Extract school ID from URL
     school_id = _extract_school_id(school_url)

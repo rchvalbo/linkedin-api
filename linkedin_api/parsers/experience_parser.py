@@ -59,8 +59,13 @@ def _is_position_group(element: dict) -> bool:
     
     Position groups have a nested pagedListComponent reference in subComponents.
     """
-    entity_comp = element.get('components', {}).get('entityComponent', {})
-    sub_components = entity_comp.get('subComponents', {}).get('components', [])
+    entity_comp = element.get('components', {}).get('entityComponent')
+    if not entity_comp:
+        return False
+    
+    # Handle case where subComponents is explicitly None
+    sub_components_obj = entity_comp.get('subComponents') or {}
+    sub_components = sub_components_obj.get('components', []) if isinstance(sub_components_obj, dict) else []
     
     for sub_comp in sub_components:
         paged_list_ref = sub_comp.get('components', {}).get('*pagedListComponent')
@@ -80,8 +85,13 @@ def _extract_position_group(element: dict, included: List[dict]) -> List[dict]:
     positions = []
     
     # Find the nested PagedListComponent URN
-    entity_comp = element.get('components', {}).get('entityComponent', {})
-    sub_components = entity_comp.get('subComponents', {}).get('components', [])
+    entity_comp = element.get('components', {}).get('entityComponent')
+    if not entity_comp:
+        return positions
+    
+    # Handle case where subComponents is explicitly None
+    sub_components_obj = entity_comp.get('subComponents') or {}
+    sub_components = sub_components_obj.get('components', []) if isinstance(sub_components_obj, dict) else []
     
     nested_paged_list_urn = None
     for sub_comp in sub_components:
@@ -274,7 +284,9 @@ def _extract_subcomponents(entity_comp: dict) -> Tuple[Optional[str], List[str]]
     description = None
     skills = []
     
-    sub_components = entity_comp.get('subComponents', {}).get('components', [])
+    # Handle case where subComponents is explicitly None
+    sub_components_obj = entity_comp.get('subComponents') or {}
+    sub_components = sub_components_obj.get('components', []) if isinstance(sub_components_obj, dict) else []
     
     for idx, sub_comp in enumerate(sub_components):
         # Find all text components (may be nested in fixedListComponent)
@@ -313,7 +325,9 @@ def _extract_location(entity_comp: dict) -> Optional[str]:
     Returns:
         Location string or None
     """
-    sub_components = entity_comp.get('subComponents', {}).get('components', [])
+    # Handle case where subComponents is explicitly None
+    sub_components_obj = entity_comp.get('subComponents') or {}
+    sub_components = sub_components_obj.get('components', []) if isinstance(sub_components_obj, dict) else []
     
     # Look for location in the components
     # Location is usually in the first or second component with entityComponent.metadata

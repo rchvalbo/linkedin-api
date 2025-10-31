@@ -1028,77 +1028,155 @@ class Linkedin(object):
             "x-li-track": '{"clientVersion":"1.13.39992","mpVersion":"1.13.39992","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
         }
         
-        res = self._fetch(full_url, headers=headers)
-        data = res.json()
+        logger.info(f"Fetching skills for {urn_id} with query ID: {query_id}")
+        logger.debug(f"Request URL: {full_url}")
+        
+        try:
+            res = self._fetch(full_url, headers=headers)
+            
+            # Check for HTTP errors
+            if res.status_code != 200:
+                logger.error(f"LinkedIn API returned status {res.status_code} for profile skills: {urn_id}")
+                logger.error(f"Response: {res.text[:500]}")  # Log first 500 chars
+                return []  # Return empty list instead of crashing
+            
+            data = res.json()
+            
+            # Log the response structure for debugging
+            logger.info(f"Skills API response keys for {urn_id}: {list(data.keys())}")
+            
+            # Check if response has error status
+            if data and "status" in data and data["status"] != 200:
+                logger.error(f"LinkedIn API error response for profile skills: {data.get('message', 'Unknown error')}")
+                return []  # Return empty list instead of crashing
+                
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"Network error fetching profile skills for {urn_id}: {req_err}")
+            return []  # Return empty list on network errors
+        except ValueError as json_err:
+            logger.error(f"Invalid JSON response for profile skills {urn_id}: {json_err}")
+            return []  # Return empty list on JSON parsing errors
+        except Exception as e:
+            logger.error(f"Unexpected error fetching profile skills for {urn_id}: {e}")
+            traceback.print_exc()
+            return []  # Return empty list on any unexpected errors
         
         # Parse the GraphQL response to extract skills in a format similar to the legacy endpoint
         skills = []
         
-        # The skills data is in the 'included' array
-        included = data.get("included", [])
-        
-        # First, build a map of entityUrn to endorsement data from EndorsedSkill objects
-        endorsed_skills_map = {}
-        for item in included:
-            if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.EndorsedSkill":
-                entity_urn = item.get("entityUrn")
-                if entity_urn:
-                    endorsed_skills_map[entity_urn] = {
-                        "endorsementCount": item.get("endorsementCount", 0),
-                        "endorsedByViewer": item.get("endorsedByViewer", False)
-                    }
-        
-        # Now extract skills from PagedListComponent
-        for item in included:
-            # Look for PagedListComponent items which contain the skills
-            if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.tetris.PagedListComponent":
-                components = item.get("components", {})
-                elements = components.get("elements", [])
+        try:
+            # The skills data is in the 'included' array
+            included = data.get("included", [])
+            
+            if not included:
+                logger.warning(f"No 'included' data found in skills response for {urn_id}")
                 
-                for element in elements:
-                    # Each element contains an entityComponent with the skill details
-                    entity_component = element.get("components", {}).get("entityComponent", {})
+                # Check if this is an error response (e.g., rate limiting)
+                if "data" in data and "errors" in data.get("data", {}):
+                    errors = data["data"]["errors"]
+                    logger.warning(f"LinkedIn API returned errors for {urn_id}")
                     
-                    if entity_component:
-                        # Extract the skill name from titleV2
-                        title_v2 = entity_component.get("titleV2", {})
-                        text_obj = title_v2.get("text", {})
-                        skill_name = text_obj.get("text")
+                    # Check specifically for fuse limit (rate limiting)
+                    for error in errors:
+                        if error.get("extensions", {}).get("classification") == "DataFetchingException":
+                            if "Fuse limit was reached" in error.get("message", ""):
+                                logger.info(f"Fuse limit detected for {urn_id} - returning raw response for client-side detection")
+                                break
+                    
+                    # Return raw response to allow client-side error detection
+                    # This matches the behavior of get_profile_experience() and get_profile_education()
+                    return data
+                
+                # No errors, just no skills - return raw response with empty included
+                logger.info(f"Profile {urn_id} appears to have no skills listed")
+                return data
+            
+            # First, build a map of entityUrn to endorsement data from EndorsedSkill objects
+            endorsed_skills_map = {}
+            for item in included:
+                try:
+                    if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.EndorsedSkill":
+                        entity_urn = item.get("entityUrn")
+                        if entity_urn:
+                            endorsed_skills_map[entity_urn] = {
+                                "endorsementCount": item.get("endorsementCount", 0),
+                                "endorsedByViewer": item.get("endorsedByViewer", False)
+                            }
+                except Exception as e:
+                    logger.warning(f"Error parsing endorsed skill item: {e}")
+                    continue  # Skip this item but continue processing others
+            
+            # Now extract skills from PagedListComponent
+            for item in included:
+                try:
+                    # Look for PagedListComponent items which contain the skills
+                    if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.tetris.PagedListComponent":
+                        components = item.get("components", {})
+                        elements = components.get("elements", [])
                         
-                        if skill_name:
-                            skill_obj = {"name": skill_name}
-                            
-                            # Try to find the entityUrn from the action component
-                            entity_urn = None
-                            sub_components = entity_component.get("subComponents", {})
-                            sub_component_list = sub_components.get("components", [])
-                            
-                            for sub_comp in sub_component_list:
-                                action_comp = sub_comp.get("components", {}).get("actionComponent", {})
-                                if action_comp:
-                                    action = action_comp.get("action", {})
-                                    endorsed_skill_action = action.get("endorsedSkillAction", {})
-                                    if endorsed_skill_action:
-                                        # Extract the URN reference (starts with *)
-                                        entity_urn = endorsed_skill_action.get("*endorsedSkill")
-                                        break
-                            
-                            # Add entityUrn if found
-                            if entity_urn:
-                                skill_obj["entityUrn"] = entity_urn
+                        for element in elements:
+                            try:
+                                # Each element contains an entityComponent with the skill details
+                                entity_component = element.get("components", {}).get("entityComponent", {})
                                 
-                                # Get endorsement data from the map
-                                if entity_urn in endorsed_skills_map:
-                                    skill_obj["numEndorsements"] = endorsed_skills_map[entity_urn]["endorsementCount"]
-                                    skill_obj["endorsedByViewer"] = endorsed_skills_map[entity_urn]["endorsedByViewer"]
-                                else:
-                                    skill_obj["numEndorsements"] = 0
-                            else:
-                                skill_obj["numEndorsements"] = 0
-                            
-                            skills.append(skill_obj)
+                                if entity_component:
+                                    # Extract the skill name from titleV2
+                                    title_v2 = entity_component.get("titleV2", {})
+                                    text_obj = title_v2.get("text", {})
+                                    skill_name = text_obj.get("text")
+                                    
+                                    if skill_name:
+                                        skill_obj = {"name": skill_name}
+                                        
+                                        # Try to find the entityUrn from the action component
+                                        entity_urn = None
+                                        sub_components = entity_component.get("subComponents", {})
+                                        sub_component_list = sub_components.get("components", [])
+                                        
+                                        for sub_comp in sub_component_list:
+                                            action_comp = sub_comp.get("components", {}).get("actionComponent", {})
+                                            if action_comp:
+                                                action = action_comp.get("action", {})
+                                                endorsed_skill_action = action.get("endorsedSkillAction", {})
+                                                if endorsed_skill_action:
+                                                    # Extract the URN reference (starts with *)
+                                                    entity_urn = endorsed_skill_action.get("*endorsedSkill")
+                                                    break
+                                        
+                                        # Add entityUrn if found
+                                        if entity_urn:
+                                            skill_obj["entityUrn"] = entity_urn
+                                            
+                                            # Get endorsement data from the map
+                                            if entity_urn in endorsed_skills_map:
+                                                skill_obj["numEndorsements"] = endorsed_skills_map[entity_urn]["endorsementCount"]
+                                                skill_obj["endorsedByViewer"] = endorsed_skills_map[entity_urn]["endorsedByViewer"]
+                                            else:
+                                                skill_obj["numEndorsements"] = 0
+                                        else:
+                                            skill_obj["numEndorsements"] = 0
+                                        
+                                        skills.append(skill_obj)
+                            except Exception as e:
+                                logger.warning(f"Error parsing skill element: {e}")
+                                continue  # Skip this element but continue processing others
+                except Exception as e:
+                    logger.warning(f"Error parsing PagedListComponent item: {e}")
+                    continue  # Skip this item but continue processing others
+                    
+        except Exception as e:
+            logger.error(f"Error parsing skills data for {urn_id}: {e}")
+            traceback.print_exc()
+            # Return raw response even on parsing errors to allow error detection
+            return data
         
-        return skills
+        # Return raw response with parsed skills
+        # This allows client-side error detection while providing parsed data
+        # Matches pattern of get_profile_experience() and get_profile_education()
+        return {
+            "skills": skills,
+            "raw_data": data
+        }
 
     def get_profile(self, public_id=None, urn_id=None):
         """Fetch full profile data.

@@ -27,7 +27,8 @@ def extract_mutual_connections(item: Dict[str, Any]) -> Dict[str, Any]:
     if insights:
         simple_insight = insights[0].get("simpleInsight", {})
         if simple_insight:
-            title_text = simple_insight.get("title", {}).get("text", "")
+            title = simple_insight.get("title")
+            title_text = title.get("text", "") if title else ""
             # Parse "55 mutual connections" -> 55
             match = re.search(r'(\d+)\s+mutual\s+connection', title_text, re.IGNORECASE)
             count = int(match.group(1)) if match else 0
@@ -53,7 +54,8 @@ def extract_connection_degree(item: Dict[str, Any]) -> Optional[str]:
         >>> extract_connection_degree(item)
         '2nd'
     """
-    badge_text = (item.get("badgeText") or {}).get("text", "")
+    badge_text_obj = item.get("badgeText")
+    badge_text = badge_text_obj.get("text", "") if badge_text_obj else ""
     # Extract "• 2nd" -> "2nd"
     match = re.search(r'(\d+)(st|nd|rd|th)', badge_text)
     return match.group(0) if match else None
@@ -73,14 +75,13 @@ def extract_premium_status(item: Dict[str, Any]) -> bool:
         >>> extract_premium_status(item)
         True
     """
-    badge_icon = item.get("badgeIcon", {})
+    badge_icon = item.get("badgeIcon")
     if badge_icon:
         attributes = badge_icon.get("attributes", [])
         if attributes:
-            icon_type = (attributes[0]
-                        .get("detailData", {})
-                        .get("icon", ""))
-            return "PREMIUM" in icon_type
+            detail_data = attributes[0].get("detailData", {})
+            icon_type = detail_data.get("icon") if detail_data else None
+            return icon_type and "PREMIUM" in icon_type
     return False
 
 
@@ -153,13 +154,20 @@ def extract_ring_status(item: Dict[str, Any]) -> Dict[str, Any]:
         >>> extract_ring_status(item)
         {'profile_ring_status': 'HIRING', 'is_hiring': True, 'is_open_to_work': False}
     """
-    image = item.get("image", {})
+    image = item.get("image")
+    if not image:
+        return {
+            "profile_ring_status": None,
+            "is_hiring": False,
+            "is_open_to_work": False
+        }
+    
     attributes = image.get("attributes", [])
     
     if attributes:
         detail_data = attributes[0].get("detailData", {})
         non_entity_profile = detail_data.get("nonEntityProfilePicture", {})
-        ring_status = non_entity_profile.get("ringStatus", None)
+        ring_status = non_entity_profile.get("ringStatus", None) if non_entity_profile else None
         
         return {
             "profile_ring_status": ring_status,
@@ -198,13 +206,16 @@ def parse_search_result(item: Dict[str, Any]) -> Dict[str, Any]:
     Parse a complete search result item into a structured format.
     
     This is the main parsing function that extracts all available fields
-    from a LinkedIn search result item.
+    from a LinkedIn search result item. Uses defensive programming to
+    handle missing or malformed data gracefully.
     
     Args:
         item: Raw search result item from LinkedIn API
         
     Returns:
-        Parsed and enriched search result with all available fields
+        Parsed and enriched search result with all available fields.
+        If parsing fails for specific fields, returns None for those fields
+        rather than failing completely.
         
     Example:
         >>> result = parse_search_result(raw_item)
@@ -218,21 +229,28 @@ def parse_search_result(item: Dict[str, Any]) -> Dict[str, Any]:
         get_urn_from_raw_update
     )
     
+    # Validate input
+    if not item or not isinstance(item, dict):
+        raise ValueError(f"Invalid search result item: expected dict, got {type(item)}")
+    
     # Extract basic fields
-    job_title = (item.get("primarySubtitle") or {}).get("text", None)
-    profile_url = (item.get("navigationContext") or {}).get("url", None)
+    primary_subtitle = item.get("primarySubtitle")
+    job_title = primary_subtitle.get("text", None) if primary_subtitle else None
+    
+    navigation_context = item.get("navigationContext")
+    profile_url = navigation_context.get("url", None) if navigation_context else None
     
     # Extract image URL
     image_url = None
-    if "image" in item:
-        artifacts = item.get("image", {})
-        if "attributes" in artifacts:
-            attributes = artifacts.get("attributes", [])
+    image_data = item.get("image")
+    if image_data:
+        attributes = image_data.get("attributes", [])
+        if attributes:
             for attribute in attributes:
                 artifact = attribute.get("detailData", {})
                 non_entity_profile = artifact.get("nonEntityProfilePicture", {})
-                vector_image = non_entity_profile.get("vectorImage", {}) or {}
-                image_artifacts = vector_image.get("artifacts", []) or []
+                vector_image = non_entity_profile.get("vectorImage") if non_entity_profile else None
+                image_artifacts = vector_image.get("artifacts", []) if vector_image else []
                 if image_artifacts:
                     image_url = image_artifacts[0].get('fileIdentifyingUrlPathSegment')
                     break
@@ -247,14 +265,12 @@ def parse_search_result(item: Dict[str, Any]) -> Dict[str, Any]:
         "urn_id": get_id_from_urn(
             get_urn_from_raw_update(item.get("entityUrn", None))
         ),
-        "lead_name": (item.get("title") or {}).get("text", None),
+        "lead_name": item.get("title", {}).get("text", None) if isinstance(item.get("title"), dict) else None,
         "job_title": job_title,
-        "location": (item.get("secondarySubtitle") or {}).get("text", None),
+        "location": item.get("secondarySubtitle", {}).get("text", None) if isinstance(item.get("secondarySubtitle"), dict) else None,
         "profile_url": profile_url,
         "image_url": image_url,
-        "distance": (item.get("entityCustomTrackingInfo") or {}).get(
-            "memberDistance", None
-        ),
+        "distance": item.get("entityCustomTrackingInfo", {}).get("memberDistance", None) if isinstance(item.get("entityCustomTrackingInfo"), dict) else None,
         
         # HIGH PRIORITY: Enhanced fields
         "public_identifier": extract_public_identifier(profile_url),

@@ -24,16 +24,16 @@ class Client(object):
     LINKEDIN_BASE_URL = "https://www.linkedin.com"
     API_BASE_URL = f"{LINKEDIN_BASE_URL}/voyager/api"
     REQUEST_HEADERS = {
-        "user-agent": " ".join(
+        "User-Agent": " ".join(
             [
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                 "AppleWebKit/537.36 (KHTML, like Gecko)",
-                "Chrome/134.0.6998.118 Safari/537.36",
+                "Chrome/141.0.0.0 Safari/537.36",
             ]
         ),
-        "accept-language": "en-US,en;q=0.9",
-        "x-li-lang": "en_US",
-        "x-restli-protocol-version": "2.0.0",
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-Li-Lang": "en_US",
+        "X-Restli-Protocol-Version": "2.0.0",
     }
 
     # Settings for authenticating with Linkedin

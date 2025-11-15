@@ -232,12 +232,13 @@ def _clean_company_name(company_name: str) -> str:
         "Skyhigh Security · Full-time" -> "Skyhigh Security"
         "EVOTEK · Part-time" -> "EVOTEK"
         "Forcepoint" -> "Forcepoint"
+        "Full-time" -> None (employment type only, no company)
     
     Args:
         company_name: Raw company name from LinkedIn
         
     Returns:
-        Cleaned company name
+        Cleaned company name or None if it's just an employment type
     """
     if not company_name:
         return company_name
@@ -246,6 +247,12 @@ def _clean_company_name(company_name: str) -> str:
     # This removes suffixes like "· Full-time", "· Part-time", "· Contract", etc.
     if '·' in company_name:
         company_name = company_name.split('·')[0].strip()
+    
+    # If the result is just an employment type (no actual company), return None
+    employment_types = ['full-time', 'part-time', 'contract', 'freelance', 'internship', 
+                       'temporary', 'seasonal', 'self-employed']
+    if company_name.lower() in employment_types:
+        return None
     
     return company_name
 
@@ -454,22 +461,25 @@ def _find_company_data(company_id: Optional[str], included: List[dict]) -> Tuple
             # Extract company name (if available)
             company_name = item.get('name')  # May not be present
             
-            # Extract logo
-            logo_result = item.get('logoResolutionResult', {})
-            vector_image = logo_result.get('vectorImage', {})
-            root_url = vector_image.get('rootUrl', '')
-            artifacts = vector_image.get('artifacts', [])
-            
-            # Get 200x200 logo (preferred size)
+            # Extract logo (safely handle None values)
+            logo_result = item.get('logoResolutionResult')
             company_logo = None
-            for artifact in artifacts:
-                if artifact.get('width') == 200:
-                    company_logo = root_url + artifact.get('fileIdentifyingUrlPathSegment', '')
-                    break
             
-            # Fallback to first available size
-            if not company_logo and artifacts:
-                company_logo = root_url + artifacts[0].get('fileIdentifyingUrlPathSegment', '')
+            if logo_result and isinstance(logo_result, dict):
+                vector_image = logo_result.get('vectorImage', {})
+                if vector_image and isinstance(vector_image, dict):
+                    root_url = vector_image.get('rootUrl', '')
+                    artifacts = vector_image.get('artifacts', [])
+                    
+                    # Get 200x200 logo (preferred size)
+                    for artifact in artifacts:
+                        if artifact.get('width') == 200:
+                            company_logo = root_url + artifact.get('fileIdentifyingUrlPathSegment', '')
+                            break
+                    
+                    # Fallback to first available size
+                    if not company_logo and artifacts:
+                        company_logo = root_url + artifacts[0].get('fileIdentifyingUrlPathSegment', '')
             
             return company_name, company_logo
     

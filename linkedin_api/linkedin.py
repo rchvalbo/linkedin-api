@@ -1117,12 +1117,20 @@ class Linkedin(object):
                         for element in elements:
                             try:
                                 # Each element contains an entityComponent with the skill details
-                                entity_component = element.get("components", {}).get("entityComponent", {})
+                                components_dict = element.get("components")
+                                if not components_dict or not isinstance(components_dict, dict):
+                                    continue
+                                    
+                                entity_component = components_dict.get("entityComponent", {})
                                 
                                 if entity_component:
                                     # Extract the skill name from titleV2
-                                    title_v2 = entity_component.get("titleV2", {})
-                                    text_obj = title_v2.get("text", {})
+                                    title_v2 = entity_component.get("titleV2")
+                                    if not title_v2 or not isinstance(title_v2, dict):
+                                        continue
+                                    text_obj = title_v2.get("text")
+                                    if not text_obj or not isinstance(text_obj, dict):
+                                        continue
                                     skill_name = text_obj.get("text")
                                     
                                     if skill_name:
@@ -1696,7 +1704,6 @@ class Linkedin(object):
         res = self._fetch(f"/organization/companies", params=params)
 
         data = res.json()
-        print('get company data: ', data)
 
         if data and "status" in data and data["status"] != 200:
             self.logger.info("request failed: {}".format(data["message"]))
@@ -2250,6 +2257,176 @@ class Linkedin(object):
             limit, offset, exclude_promoted_posts
         )
         return get_list_posts_sorted_without_promoted(l_urns, l_posts)
+
+    def search_keyphrase(
+        self, 
+        keywords=None, 
+        network_distance="S", 
+        start=0, 
+        limit=-1,
+        geo_urns=None,
+        current_companies=None,
+        industries=None,
+        schools=None,
+        connection_of=None,
+        past_companies=None
+    ):
+        """Perform a LinkedIn keyphrase search using FACETED_SEARCH.
+        
+        This method searches for people using optional keyword phrase with network filters.
+        
+        :param keywords: Search keyphrase (e.g., "tech recruiters in florida"), optional
+        :type keywords: str, optional
+        :param network_distance: Network distance filter (F=first-degree, S=second-degree), defaults to "S"
+        :type network_distance: str, optional
+        :param start: Pagination offset, defaults to 0
+        :type start: int, optional
+        :param limit: Maximum number of results to return, defaults to -1 (no limit)
+        :type limit: int, optional
+        :param geo_urns: List of geographic URNs to filter by location
+        :type geo_urns: list, optional
+        :param current_companies: List of company IDs to filter by current employer
+        :type current_companies: list, optional
+        :param industries: List of industry IDs to filter by industry
+        :type industries: list, optional
+        :param schools: List of school URNs to filter by education
+        :type schools: list, optional
+        :param connection_of: List of member IDs to filter by mutual connections
+        :type connection_of: list, optional
+        :param past_companies: List of company IDs to filter by past employers
+        :type past_companies: list, optional
+        
+        :return: List of search results
+        :rtype: list
+        """
+        results = []
+        current_start = start
+        
+        # LinkedIn typically returns ~10 results per request
+        page_size = 10
+        
+        while True:
+            # Build the GraphQL query
+            query_params = [
+                "(key:network,value:List({}))".format(network_distance),
+                "(key:resultType,value:List(PEOPLE))"
+            ]
+            
+            # Add optional filter parameters
+            if geo_urns and isinstance(geo_urns, list) and len(geo_urns) > 0:
+                geo_values = ",".join(str(urn) for urn in geo_urns if urn)
+                if geo_values:
+                    query_params.append(f"(key:geoUrn,value:List({geo_values}))")
+            
+            if current_companies and isinstance(current_companies, list) and len(current_companies) > 0:
+                company_values = ",".join(str(cid) for cid in current_companies if cid)
+                if company_values:
+                    query_params.append(f"(key:currentCompany,value:List({company_values}))")
+            
+            if industries and isinstance(industries, list) and len(industries) > 0:
+                industry_values = ",".join(str(ind) for ind in industries if ind)
+                if industry_values:
+                    query_params.append(f"(key:industry,value:List({industry_values}))")
+            
+            if schools and isinstance(schools, list) and len(schools) > 0:
+                school_values = ",".join(str(sch) for sch in schools if sch)
+                if school_values:
+                    query_params.append(f"(key:schoolFilter,value:List({school_values}))")
+            
+            if connection_of and isinstance(connection_of, list) and len(connection_of) > 0:
+                connection_values = ",".join(str(conn) for conn in connection_of if conn)
+                if connection_values:
+                    query_params.append(f"(key:connectionOf,value:List({connection_values}))")
+            
+            if past_companies and isinstance(past_companies, list) and len(past_companies) > 0:
+                past_company_values = ",".join(str(cid) for cid in past_companies if cid)
+                if past_company_values:
+                    query_params.append(f"(key:pastCompany,value:List({past_company_values}))")
+            
+            query_params_str = ",".join(query_params)
+            
+            # Construct the query part with optional keywords
+            query_parts = []
+            if keywords:
+                encoded_keywords = quote(keywords)
+                query_parts.append(f"keywords:{encoded_keywords}")
+            query_parts.append("flagshipSearchIntent:SEARCH_SRP")
+            query_parts.append(f"queryParameters:List({query_params_str})")
+            query_parts.append("includeFiltersInResponse:false")
+            
+            query_str = ",".join(query_parts)
+            
+            # Construct the variables parameter
+            variables = (
+                f"(start:{current_start},"
+                f"origin:FACETED_SEARCH,"
+                f"query:({query_str}))"
+            )
+            
+            # QueryId for the keyphrase search endpoint
+            query_id = "voyagerSearchDashClusters.ef3d0937fb65bd7812e32e5a85028e79"
+            
+            try:
+                res = self._fetch(
+                    f"/graphql?variables={variables}&queryId={query_id}"
+                )
+                res.raise_for_status()
+            except requests.exceptions.HTTPError as error:
+                self.logger.error(f"HTTP error occurred: {error}")
+                if error.response.status_code == 401:
+                    return {"status": 401, "message": "Unauthorized"}
+                break
+            except Exception as err:
+                self.logger.error(f"Error occurred during keyphrase search: {err}")
+                break
+            
+            data = res.json()
+            data_clusters = data.get("data", {}).get("searchDashClustersByAll", {})
+            
+            if not data_clusters:
+                break
+            
+            if data_clusters.get("_type") != "com.linkedin.restli.common.CollectionResponse":
+                break
+            
+            # Extract results from clusters
+            new_elements = []
+            for cluster in data_clusters.get("elements", []):
+                if cluster.get("_type") != "com.linkedin.voyager.dash.search.SearchClusterViewModel":
+                    continue
+                
+                for item in cluster.get("items", []):
+                    if item.get("_type") != "com.linkedin.voyager.dash.search.SearchItem":
+                        continue
+                    
+                    # Get the entityResult - it's embedded directly in the response
+                    entity_result = item.get("item", {}).get("entityResult")
+                    
+                    if entity_result and entity_result.get("_type") == "com.linkedin.voyager.dash.search.EntityResultViewModel":
+                        new_elements.append(entity_result)
+            
+            if not new_elements:
+                break
+            
+            results.extend(new_elements)
+            
+            # Check if we've reached the limit
+            if limit > -1 and len(results) >= limit:
+                results = results[:limit]
+                break
+            
+            # Move to next page
+            current_start += len(new_elements)
+            
+            # Safety check to prevent infinite loops
+            if len(results) >= Linkedin._MAX_REPEATED_REQUESTS * page_size:
+                self.logger.warning("Reached maximum request limit")
+                break
+            
+            self.logger.debug(f"Keyphrase search results grew to {len(results)}")
+            self._evade()
+        
+        return results
 
     def get_job(self, job_id):
         """Fetch data about a given job.

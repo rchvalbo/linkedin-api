@@ -258,10 +258,14 @@ class Linkedin(object):
             except requests.exceptions.HTTPError as error:
                 print(f"HTTP error occurred: {error}")
                 if error.response.status_code == 401:
-                    return res.json()
-            # except Exception as err:
-            #     print(f"Other error occurred: {err}")
-            #     return []
+                    return {"status": 401, "message": "Unauthorized"}
+                elif error.response.status_code == 429:
+                    return {"status": 429, "message": "Rate limit exceeded"}
+                else:
+                    return {"status": error.response.status_code, "message": str(error)}
+            except Exception as err:
+                print(f"Other error occurred: {err}")
+                return {"error": str(err), "message": "Network or connection error"}
             
             data = res.json()
             
@@ -684,12 +688,15 @@ class Linkedin(object):
         try:
             res = self._fetch(full_url, headers=headers)
             res.raise_for_status()  # Raise an exception for HTTP errors
-        except requests.exceptions.HTTPError as http_err:
-            print(f"HTTP error occurred: {http_err}")
-            return []
+        except requests.exceptions.HTTPError as error:
+            if error.response.status_code == 401:
+                return {"status": 401, "message": "Unauthorized"}
+            elif error.response.status_code == 429:
+                return {"status": 429, "message": "Rate limit exceeded"}
+            else:
+                return {"status": error.response.status_code, "message": str(error)}
         except Exception as err:
-            print(f"Other error occurred: {err}")
-            return []
+            return {"error": str(err), "message": "Network or connection error"}
 
         # Attempt to parse JSON response
         try:
@@ -811,21 +818,44 @@ class Linkedin(object):
         try:
             res = self._fetch(full_url, headers=headers)
             print(f"Response status: {res.status_code}")
+            
+            # Check for HTTP 401 (session expired)
+            if res.status_code == 401:
+                logger.warning(f"Session expired for profile contact info: {public_id}")
+                return {"status": 401, "message": "session expired"}
+            
+            # Check for HTTP 429 (rate limited)
+            if res.status_code == 429:
+                logger.warning(f"Rate limited for profile contact info: {public_id}")
+                return {"status": 429, "message": "rate limited"}
+            
+            # Check for other HTTP errors
+            if res.status_code != 200:
+                logger.error(f"LinkedIn API returned status {res.status_code} for contact info: {public_id}")
+                return {"status": res.status_code, "message": f"HTTP {res.status_code} error"}
+            
             data = res.json()
             print(f"Response data keys: {data.keys()}")
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"Network error fetching contact info for {public_id}: {req_err}")
+            return {"status": 500, "message": f"Network error: {str(req_err)}"}
+        except ValueError as json_err:
+            logger.error(f"Invalid JSON response for contact info {public_id}: {json_err}")
+            return {"status": 500, "message": f"Invalid JSON response: {str(json_err)}"}
         except Exception as e:
             print(f"!!! Error fetching contact info GraphQL: {e}")
             print(f"!!! URL: {full_url}")
             logger.error(f"Error fetching contact info GraphQL: {e}")
             logger.error(f"URL: {full_url}")
-            raise
+            return {"status": 500, "message": str(e)}
         
         # Debug: Log the response structure
         logger.debug(f"GraphQL contact info response keys: {data.keys()}")
         if "errors" in data:
             print(f"!!! GraphQL errors found: {data['errors']}")
             logger.error(f"GraphQL errors: {data['errors']}")
-            raise Exception(f"GraphQL returned errors: {data['errors']}")
+            # Return structured error instead of raising exception
+            return {"status": 500, "message": f"GraphQL returned errors: {data['errors']}"}
         
         # Parse the GraphQL response to extract contact info
         # The profile data is in the 'included' array with type Profile
@@ -1034,11 +1064,21 @@ class Linkedin(object):
         try:
             res = self._fetch(full_url, headers=headers)
             
-            # Check for HTTP errors
+            # Check for HTTP 401 (session expired) - BEFORE fuse limit check
+            if res.status_code == 401:
+                logger.warning(f"Session expired for profile skills: {urn_id}")
+                return {"status": 401, "message": "session expired"}
+            
+            # Check for HTTP 429 (rate limited) - BEFORE fuse limit check
+            if res.status_code == 429:
+                logger.warning(f"Rate limited for profile skills: {urn_id}")
+                return {"status": 429, "message": "rate limited"}
+            
+            # Check for other HTTP errors
             if res.status_code != 200:
                 logger.error(f"LinkedIn API returned status {res.status_code} for profile skills: {urn_id}")
                 logger.error(f"Response: {res.text[:500]}")  # Log first 500 chars
-                return []  # Return empty list instead of crashing
+                return {"status": res.status_code, "message": f"HTTP {res.status_code} error"}
             
             data = res.json()
             
@@ -1052,14 +1092,14 @@ class Linkedin(object):
                 
         except requests.exceptions.RequestException as req_err:
             logger.error(f"Network error fetching profile skills for {urn_id}: {req_err}")
-            return []  # Return empty list on network errors
+            return {"status": 500, "message": f"Network error: {str(req_err)}"}
         except ValueError as json_err:
             logger.error(f"Invalid JSON response for profile skills {urn_id}: {json_err}")
-            return []  # Return empty list on JSON parsing errors
+            return {"status": 500, "message": f"Invalid JSON response: {str(json_err)}"}
         except Exception as e:
             logger.error(f"Unexpected error fetching profile skills for {urn_id}: {e}")
             traceback.print_exc()
-            return []  # Return empty list on any unexpected errors
+            return {"status": 500, "message": str(e)}
         
         # Parse the GraphQL response to extract skills in a format similar to the legacy endpoint
         skills = []
@@ -1242,7 +1282,19 @@ class Linkedin(object):
             "x-li-deco-include-micro-schema": "true",
         }
         
-        res = self._fetch(full_url, headers=headers)
+        try:
+            res = self._fetch(full_url, headers=headers)
+            res.raise_for_status()
+        except requests.exceptions.HTTPError as error:
+            if error.response.status_code == 401:
+                return {"status": 401, "message": "Unauthorized"}
+            elif error.response.status_code == 429:
+                return {"status": 429, "message": "Rate limit exceeded"}
+            else:
+                return {"status": error.response.status_code, "message": str(error)}
+        except Exception as err:
+            return {"error": str(err), "message": "Network or connection error"}
+        
         data = res.json()
         
         # Extract the main profile data
@@ -1508,9 +1560,35 @@ class Linkedin(object):
         sleep(3)
         print(f"Fetching connections, starting from {len(collectedConnections)}")
 
-        # Fetch connections using LinkedIn API endpoint with provided count and offset
-        res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count={count}&q=search&sortType=RECENTLY_ADDED&start={offset}")
-        data = res.json()
+        try:
+            # Fetch connections using LinkedIn API endpoint with provided count and offset
+            res = self._fetch(f"/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count={count}&q=search&sortType=RECENTLY_ADDED&start={offset}")
+            
+            # Check for HTTP 401 (session expired)
+            if res.status_code == 401:
+                logger.warning(f"Session expired for get_my_connections")
+                return {"status": 401, "message": "session expired"}
+            
+            # Check for HTTP 429 (rate limited)
+            if res.status_code == 429:
+                logger.warning(f"Rate limited for get_my_connections")
+                return {"status": 429, "message": "rate limited"}
+            
+            # Check for other HTTP errors
+            if res.status_code != 200:
+                logger.error(f"LinkedIn API returned status {res.status_code} for get_my_connections")
+                return {"status": res.status_code, "message": f"HTTP {res.status_code} error"}
+            
+            data = res.json()
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"Network error fetching connections: {req_err}")
+            return {"status": 500, "message": f"Network error: {str(req_err)}"}
+        except ValueError as json_err:
+            logger.error(f"Invalid JSON response for connections: {json_err}")
+            return {"status": 500, "message": f"Invalid JSON response: {str(json_err)}"}
+        except Exception as e:
+            logger.error(f"Unexpected error fetching connections: {e}")
+            return {"status": 500, "message": str(e)}
 
         # Extract elements from the response data
         elements = data.get("elements")
@@ -1843,12 +1921,24 @@ class Linkedin(object):
     def get_user_profile(self, use_cache=True):
         """Get the current user profile. If not cached, a network request will be fired.
 
-        :return: Profile data for currently logged in user
+        :return: Profile data for currently logged in user, or error dict with status/message
         :rtype: dict
         """
         me_profile = self.client.metadata.get("me")
         if not self.client.metadata.get("me") or not use_cache:
-            res = self._fetch(f"/me")
+            try:
+                res = self._fetch(f"/me")
+                res.raise_for_status()
+            except requests.exceptions.HTTPError as error:
+                if error.response.status_code == 401:
+                    return {"status": 401, "message": "Unauthorized"}
+                elif error.response.status_code == 429:
+                    return {"status": 429, "message": "Rate limit exceeded"}
+                else:
+                    return {"status": error.response.status_code, "message": str(error)}
+            except Exception as err:
+                return {"error": str(err), "message": "Network or connection error"}
+            
             me_profile = res.json()
             # cache profile
             self.client.metadata["me"] = me_profile
@@ -2123,7 +2213,7 @@ class Linkedin(object):
         return data.get("data", {})
 
     def get_profile_network_info(self, public_profile_id):
-        """Fetch network information for a given LinkedIn profile.
+        """DEPRECATED - Fetch network information for a given LinkedIn profile.
 
         :param public_profile_id: public ID of a LinkedIn profile
         :type public_profile_id: str
@@ -2375,10 +2465,13 @@ class Linkedin(object):
                 self.logger.error(f"HTTP error occurred: {error}")
                 if error.response.status_code == 401:
                     return {"status": 401, "message": "Unauthorized"}
-                break
+                elif error.response.status_code == 429:
+                    return {"status": 429, "message": "Rate limit exceeded"}
+                else:
+                    return {"status": error.response.status_code, "message": str(error)}
             except Exception as err:
                 self.logger.error(f"Error occurred during keyphrase search: {err}")
-                break
+                return {"error": str(err), "message": "Network or connection error"}
             
             data = res.json()
             data_clusters = data.get("data", {}).get("searchDashClustersByAll", {})

@@ -1797,7 +1797,7 @@ class Linkedin(object):
         :param profile_urn_id: LinkedIn URN ID for a profile
         :type profile_urn_id: str
 
-        :return: Conversation data
+        :return: Conversation data or structured error dict
         :rtype: dict
         """
         # passing `params` doesn't work properly, think it's to do with List().
@@ -1806,6 +1806,16 @@ class Linkedin(object):
             f"/messaging/conversations?\
             keyVersion=LEGACY_INBOX&q=participants&recipients=List({profile_urn_id})"
         )
+
+        # Check for HTTP errors
+        if res.status_code == 401:
+            return {"status": 401, "message": "LinkedIn session expired"}
+        elif res.status_code == 429:
+            return {"status": 429, "message": "Rate limit exceeded"}
+        elif res.status_code >= 500:
+            return {"status": res.status_code, "message": f"LinkedIn server error: {res.status_code}"}
+        elif res.status_code >= 400:
+            return {"status": res.status_code, "message": f"LinkedIn API error: {res.status_code}"}
 
         data = res.json()
 
@@ -1835,10 +1845,20 @@ class Linkedin(object):
         :param conversation_urn_id: LinkedIn URN ID for a conversation
         :type conversation_urn_id: str
 
-        :return: Conversation data
+        :return: Conversation data or structured error dict
         :rtype: dict
         """
         res = self._fetch(f"/messaging/conversations/{conversation_urn_id}/events")
+
+        # Check for HTTP errors
+        if res.status_code == 401:
+            return {"status": 401, "message": "LinkedIn session expired"}
+        elif res.status_code == 429:
+            return {"status": 429, "message": "Rate limit exceeded"}
+        elif res.status_code >= 500:
+            return {"status": res.status_code, "message": f"LinkedIn server error: {res.status_code}"}
+        elif res.status_code >= 400:
+            return {"status": res.status_code, "message": f"LinkedIn API error: {res.status_code}"}
 
         return res.json()
 
@@ -1899,6 +1919,10 @@ class Linkedin(object):
             )
             print('send_message status code:', res.status_code)
 
+        # Return 429 specifically for rate limiting (like add_connection does)
+        if res.status_code == 429:
+            return 429
+        
         return res.status_code != 201
 
     def mark_conversation_as_seen(self, conversation_urn_id):

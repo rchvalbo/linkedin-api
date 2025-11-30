@@ -37,11 +37,10 @@ class Client(object):
     }
 
     # Settings for authenticating with Linkedin
+    # Updated to iOS 16, LinkedIn 9.20 (moderately modern, proven stable)
     AUTH_REQUEST_HEADERS = {
-        "X-Li-User-Agent": "LIAuthLibrary:3.2.4 \
-                            com.linkedin.LinkedIn:8.8.1 \
-                            iPhone:8.3",
-        "User-Agent": "LinkedIn/8.8.1 CFNetwork/711.3.18 Darwin/14.0.0",
+        "User-Agent": "LinkedIn/9.20.0 CFNetwork/1410.0.3 Darwin/22.6.0",
+        "X-Li-User-Agent": "LIAuthLibrary:4.5.0 com.linkedin.LinkedIn:9.20.0 iPhone:16.0",
         "X-User-Language": "en",
         "X-User-Locale": "en_US",
         "Accept-Language": "en-us",
@@ -52,7 +51,9 @@ class Client(object):
     ):
         self.session = requests.session()
         self.session.proxies.update(proxies)
-        self.session.headers.update(Client.REQUEST_HEADERS)
+        # Use mobile device fingerprint for all requests to maintain consistent identity
+        # This prevents LinkedIn from invalidating sessions due to device fingerprint mismatch
+        self.session.headers.update(Client.AUTH_REQUEST_HEADERS)
         self.proxies = proxies
         self.logger = logger
         self.metadata = {}

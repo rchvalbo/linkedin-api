@@ -2074,14 +2074,33 @@ class Linkedin(object):
             headers={"accept": "application/vnd.linkedin.normalized+json+2.1"},
             params=params,
         )
-        # Check for connection_response.status_code == 400 and connection_response.json().get('data', {}).get('code') == 'CANT_RESEND_YET'
-        # If above condition is True then request has been already sent, (might be pending or already connected)
         print('status code:', res.status_code)
-        # 406 means already sent request so we return false because not an error 
-        if res.status_code == 406:
-            return False
+        
         if res.status_code == 429:
             return 429
+        
+        # 406 means already sent request - treat same as 400 INVITATION_ALREADY_SENT
+        if res.status_code == 406:
+            print('406 - invitation already sent')
+            return 'INVITATION_ALREADY_SENT'
+        
+        # Check for 400 with specific error codes indicating invitation already sent
+        if res.status_code == 400:
+            try:
+                error_data = res.json()
+                # LinkedIn returns error codes like CANT_RESEND_YET, ALREADY_INVITED, etc.
+                error_code = error_data.get('code') or error_data.get('data', {}).get('code')
+                print(f'400 error code: {error_code}, full response: {error_data}')
+                if error_code in ['CANT_RESEND_YET', 'ALREADY_INVITED', 'INVITATION_PENDING']:
+                    return 'INVITATION_ALREADY_SENT'
+                # Check for message patterns if code not found
+                error_message = str(error_data.get('message', '')).lower()
+                if 'already' in error_message or 'pending' in error_message or 'resend' in error_message:
+                    return 'INVITATION_ALREADY_SENT'
+            except Exception as e:
+                print(f'Error parsing 400 response: {e}')
+            return True
+            
         if res.ok:
             return False
         else:

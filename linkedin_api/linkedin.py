@@ -1249,10 +1249,16 @@ class Linkedin(object):
 
         # Construct the profile URN
         if urn_id:
-            if not urn_id.startswith("urn:li:fsd_profile:"):
-                profile_urn = f"urn:li:fsd_profile:{urn_id}"
+            # Upstream systems often store the raw ID (e.g., ACoA...) which may represent
+            # either a fsd_profile or a fs_miniProfile URN. We try fsd_profile first, and
+            # fall back to fs_miniProfile on 404.
+            if urn_id.startswith("urn:li:"):
+                candidate_profile_urns = [urn_id]
             else:
-                profile_urn = urn_id
+                candidate_profile_urns = [
+                    f"urn:li:fsd_profile:{urn_id}",
+                    f"urn:li:fs_miniProfile:{urn_id}",
+                ]
         else:
             # If only public_id is provided, urn_id is required
             # Users should search for the profile first to get the URN, or use the profile URL to extract it
@@ -1264,8 +1270,8 @@ class Linkedin(object):
         # GraphQL decoration ID for full profile
         decoration_id = "com.linkedin.voyager.dash.deco.identity.profile.FullProfile-76"
         
-        # Construct the URL
-        full_url = f"/identity/dash/profiles/{profile_urn}?decorationId={decoration_id}"
+        def _build_profile_url(profile_urn_value: str) -> str:
+            return f"/identity/dash/profiles/{profile_urn_value}?decorationId={decoration_id}"
         
         # Generate a page instance ID
         random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
@@ -1282,18 +1288,36 @@ class Linkedin(object):
             "x-li-deco-include-micro-schema": "true",
         }
         
-        try:
-            res = self._fetch(full_url, headers=headers)
-            res.raise_for_status()
-        except requests.exceptions.HTTPError as error:
-            if error.response.status_code == 401:
-                return {"status": 401, "message": "Unauthorized"}
-            elif error.response.status_code == 429:
-                return {"status": 429, "message": "Rate limit exceeded"}
-            else:
-                return {"status": error.response.status_code, "message": str(error)}
-        except Exception as err:
-            return {"error": str(err), "message": "Network or connection error"}
+        last_http_error = None
+        last_exception = None
+
+        for candidate_urn in candidate_profile_urns:
+            full_url = _build_profile_url(candidate_urn)
+            try:
+                res = self._fetch(full_url, headers=headers)
+                res.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as error:
+                last_http_error = error
+                # If this is a 404 and we have another candidate URN, try the next.
+                if error.response is not None and error.response.status_code == 404:
+                    continue
+                if error.response is not None and error.response.status_code == 401:
+                    return {"status": 401, "message": "Unauthorized"}
+                if error.response is not None and error.response.status_code == 429:
+                    return {"status": 429, "message": "Rate limit exceeded"}
+                return {"status": error.response.status_code if error.response is not None else 500, "message": str(error)}
+            except Exception as err:
+                last_exception = err
+                return {"error": str(err), "message": "Network or connection error"}
+
+        # If we exhausted candidates, return the last HTTP error.
+        if last_http_error is not None and (not locals().get('res') or res is None):
+            status_code = last_http_error.response.status_code if last_http_error.response is not None else 500
+            return {"status": status_code, "message": str(last_http_error)}
+
+        if last_exception is not None and (not locals().get('res') or res is None):
+            return {"error": str(last_exception), "message": "Network or connection error"}
         
         data = res.json()
         

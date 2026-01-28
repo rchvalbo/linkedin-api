@@ -1815,21 +1815,46 @@ class Linkedin(object):
 
         return company
 
-    def get_conversation_details(self, profile_urn_id):
+    def get_conversation_details(self, profile_urn_id, public_id=None):
         """Fetch conversation (message thread) details for a given LinkedIn profile.
+        
+        Uses the new GraphQL voyagerMessagingDashComposeOptions endpoint which is more reliable
+        than the legacy messaging/conversations endpoint.
 
-        :param profile_urn_id: LinkedIn URN ID for a profile
+        :param profile_urn_id: LinkedIn URN ID for a profile (e.g., 'ACoAADqgE7YBTAJGF3Adkwpk7W7kKhoLusaEo6Y')
         :type profile_urn_id: str
+        :param public_id: LinkedIn public ID for referer header (e.g., 'jessrozman'). Optional.
+        :type public_id: str, optional
 
         :return: Conversation data or structured error dict
         :rtype: dict
         """
-        # passing `params` doesn't work properly, think it's to do with List().
-        # Might be a bug in `requests`?
-        res = self._fetch(
-            f"/messaging/conversations?\
-            keyVersion=LEGACY_INBOX&q=participants&recipients=List({profile_urn_id})"
-        )
+        # Use the new GraphQL endpoint: voyagerMessagingDashComposeOptions
+        # URL format: /voyagerMessagingDashComposeOptions/urn:li:fsd_composeOption:(PROFILE_URN,NONE,EMPTY_CONTEXT_ENTITY_URN)
+        from urllib.parse import quote
+        
+        compose_option_urn = f"urn:li:fsd_composeOption:({profile_urn_id},NONE,EMPTY_CONTEXT_ENTITY_URN)"
+        encoded_urn = quote(compose_option_urn, safe='')
+        url = f"/voyagerMessagingDashComposeOptions/{encoded_urn}"
+        
+        # Generate page instance ID
+        random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
+        page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+        page_instance = f"urn:li:page:d_flagship3_profile_view_base;{page_instance_id}"
+        
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+            "x-li-page-instance": page_instance,
+            "x-li-pem-metadata": "Voyager - Messaging - Course=compose-option-cta",
+            "x-li-track": '{"clientVersion":"1.13.40037","mpVersion":"1.13.40037","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
+        }
+        
+        # Only add referer header if publicId is provided
+        if public_id:
+            headers["referer"] = f"https://www.linkedin.com/in/{public_id}/"
+        
+        res = self._fetch(url, headers=headers)
 
         # Check for HTTP errors
         if res.status_code == 401:
@@ -1842,14 +1867,23 @@ class Linkedin(object):
             return {"status": res.status_code, "message": f"LinkedIn API error: {res.status_code}"}
 
         data = res.json()
-
-        if data["elements"] == []:
-            return {}
-
-        item = data["elements"][0]
-        item["id"] = get_id_from_urn(item["entityUrn"])
-
-        return item
+        
+        # Extract conversation URN from the new response format
+        # Response structure: { "data": { "composeNavigationContext": { "existingConversationUrn": "urn:li:fsd_conversation:..." } } }
+        compose_context = data.get("data", {}).get("composeNavigationContext", {})
+        existing_conversation_urn = compose_context.get("existingConversationUrn")
+        
+        if existing_conversation_urn:
+            # Extract the conversation ID from the URN (e.g., "urn:li:fsd_conversation:2-xxx" -> "2-xxx")
+            conversation_id = existing_conversation_urn.split(":")[-1] if ":" in existing_conversation_urn else existing_conversation_urn
+            return {
+                "entityUrn": existing_conversation_urn,
+                "id": conversation_id,
+                "recipientUrns": compose_context.get("recipientUrns", []),
+            }
+        
+        # No existing conversation found
+        return {}
 
     def get_conversations(self):
         """Fetch list of conversations the user is in.
@@ -1886,68 +1920,156 @@ class Linkedin(object):
 
         return res.json()
 
-    def send_message(self, message_body, conversation_urn_id=None, recipients=None):
+    def send_message(self, message_body, conversation_urn_id=None, recipients=None, sender_urn_id=None):
         """Send a message to a given conversation.
+        
+        Uses legacy endpoint when conversation_urn_id is provided (still works).
+        Uses new GraphQL endpoint when only recipients are provided:
+          - With conversationUrn if existing conversation found
+          - With hostRecipientUrns for new conversations (no existing conversation)
 
         :param message_body: Message text to send
         :type message_body: str
-        :param conversation_urn_id: LinkedIn URN ID for a conversation
+        :param conversation_urn_id: LinkedIn conversation URN ID (e.g., '2-xxx')
         :type conversation_urn_id: str, optional
-        :param recipients: List of profile urn id's
+        :param recipients: List of profile urn id's (used to get conversation URN if not provided)
         :type recipients: list, optional
+        :param sender_urn_id: The sender's profile URN ID (required for new GraphQL endpoint)
+        :type sender_urn_id: str, optional
 
-        :return: Error state. If True, an error occured.
-        :rtype: boolean
+        :return: Error state. If True, an error occured. Returns 429 for rate limit.
+        :rtype: boolean or int
         """
-        params = {"action": "create"}
-
         if not (conversation_urn_id or recipients):
             self.logger.debug("Must provide [conversation_urn_id] or [recipients].")
             return True
 
-        message_event = {
-            "eventCreate": {
-                "originToken": str(uuid.uuid4()),
-                "value": {
-                    "com.linkedin.voyager.messaging.create.MessageCreate": {
-                        "attributedBody": {
-                            "text": message_body,
-                            "attributes": [],
-                        },
-                        "attachments": [],
-                    }
-                },
-                "trackingId": generate_trackingId_as_charString(),
-            },
-            "dedupeByClientGeneratedToken": False,
-        }
+        params = {"action": "create"}
 
+        # PATH 1: If we have conversation_urn_id, use legacy endpoint (still works)
         if conversation_urn_id and not recipients:
+            message_event = {
+                "eventCreate": {
+                    "originToken": str(uuid.uuid4()),
+                    "value": {
+                        "com.linkedin.voyager.messaging.create.MessageCreate": {
+                            "attributedBody": {
+                                "text": message_body,
+                                "attributes": [],
+                            },
+                            "attachments": [],
+                        }
+                    },
+                    "trackingId": generate_trackingId_as_charString(),
+                },
+                "dedupeByClientGeneratedToken": False,
+            }
             res = self._post(
                 f"/messaging/conversations/{conversation_urn_id}/events",
                 params=params,
                 data=json.dumps(message_event),
             )
-        elif recipients and not conversation_urn_id:
-            print('recipients:', recipients)
-            message_event["recipients"] = recipients
-            message_event["subtype"] = "MEMBER_TO_MEMBER"
-            payload = {
-                "keyVersion": "LEGACY_INBOX",
-                "conversationCreate": message_event,
-            }
-            res = self._post(
-                f"/messaging/conversations",
-                params=params,
-                data=json.dumps(payload),
-            )
-            print('send_message status code:', res.status_code)
+            
+            if res.status_code == 429:
+                return 429
+            return res.status_code != 201
 
-        # Return 429 specifically for rate limiting (like add_connection does)
-        if res.status_code == 429:
-            return 429
+        # PATH 2: If we have recipients but no conversation_urn_id, use new GraphQL endpoint
+        # (Legacy /messaging/conversations endpoint is broken with 500 errors)
+        if recipients and not conversation_urn_id:
+            # Get sender URN from user profile if not provided
+            if not sender_urn_id:
+                user_profile = self.get_user_profile()
+                if isinstance(user_profile, dict) and "status" in user_profile:
+                    return True
+                sender_urn_id = user_profile.get("miniProfile", {}).get("entityUrn", "").split(":")[-1]
+                if not sender_urn_id:
+                    sender_urn_id = user_profile.get("plainId")
+
+            full_sender_urn = f"urn:li:fsd_profile:{sender_urn_id}"
+            recipient_urn = recipients[0] if recipients else None
+            
+            if not recipient_urn:
+                return True
+
+            # Try to get existing conversation URN for the recipient
+            conv_details = self.get_conversation_details(recipient_urn)
+            existing_conversation_id = conv_details.get("id") if conv_details else None
+
+            headers = {
+                "accept": "application/vnd.linkedin.normalized+json+2.1",
+                "x-restli-protocol-version": "2.0.0",
+                "content-type": "application/json",
+            }
+
+            if existing_conversation_id:
+                # PATH 2a: Existing conversation - use conversationUrn in payload
+                full_conversation_urn = f"urn:li:msg_conversation:({full_sender_urn},{existing_conversation_id})"
+                
+                payload = {
+                    "message": {
+                        "body": {
+                            "attributes": [],
+                            "text": message_body
+                        },
+                        "renderContentUnions": [],
+                        "conversationUrn": full_conversation_urn,
+                        "originToken": str(uuid.uuid4())
+                    },
+                    "mailboxUrn": full_sender_urn,
+                    "trackingId": generate_trackingId_as_charString(),
+                    "dedupeByClientGeneratedToken": False
+                }
+            else:
+                # PATH 2b: New conversation - use hostRecipientUrns instead of conversationUrn
+                full_recipient_urn = f"urn:li:fsd_profile:{recipient_urn}"
+                
+                payload = {
+                    "message": {
+                        "body": {
+                            "attributes": [],
+                            "text": message_body
+                        },
+                        "renderContentUnions": [],
+                        "originToken": str(uuid.uuid4())
+                    },
+                    "hostRecipientUrns": [full_recipient_urn],
+                    "mailboxUrn": full_sender_urn,
+                    "trackingId": generate_trackingId_as_charString(),
+                    "dedupeByClientGeneratedToken": False
+                }
+            
+            res = self._post(
+                "/voyagerMessagingDashMessengerMessages",
+                params={"action": "createMessage"},
+                data=json.dumps(payload),
+                headers=headers
+            )
+
+            if res.status_code == 429:
+                return 429
+            
+            if res.status_code == 200:
+                # For new conversations, extract and return the conversation_urn from response
+                # Response contains: { "value": { "conversationUrn": "urn:li:msg_conversation:(...)", ... } }
+                if not existing_conversation_id:
+                    try:
+                        response_data = res.json()
+                        conversation_urn = response_data.get("value", {}).get("conversationUrn")
+                        if conversation_urn:
+                            # Extract just the conversation ID from the full URN
+                            # Format: urn:li:msg_conversation:(senderUrn,conversationId)
+                            # We want just the conversationId part (e.g., "2-xxx")
+                            if "," in conversation_urn:
+                                conversation_id = conversation_urn.split(",")[-1].rstrip(")")
+                                return {"success": True, "conversation_urn": conversation_id}
+                    except Exception:
+                        pass
+                return False  # Success, no error
+            
+            return True  # Error
         
-        return res.status_code != 201
+        return True
 
     def mark_conversation_as_seen(self, conversation_urn_id):
         """Send 'seen' to a given conversation.

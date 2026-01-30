@@ -1925,8 +1925,8 @@ class Linkedin(object):
         
         Uses legacy endpoint when conversation_urn_id is provided (still works).
         Uses new GraphQL endpoint when only recipients are provided:
-          - With conversationUrn if existing conversation found
-          - With hostRecipientUrns for new conversations (no existing conversation)
+        - With conversationUrn if existing conversation found
+        - With hostRecipientUrns for new conversations (no existing conversation)
 
         :param message_body: Message text to send
         :type message_body: str
@@ -1994,6 +1994,18 @@ class Linkedin(object):
 
             # Try to get existing conversation URN for the recipient
             conv_details = self.get_conversation_details(recipient_urn)
+            
+            # Check if get_conversation_details returned an error
+            if isinstance(conv_details, dict) and "status" in conv_details:
+                # Error occurred in get_conversation_details
+                status = conv_details.get("status")
+                if status == 401:
+                    return True  # Session expired
+                elif status == 429:
+                    return 429  # Rate limited
+                else:
+                    return True  # Other error
+            
             existing_conversation_id = conv_details.get("id") if conv_details else None
 
             headers = {

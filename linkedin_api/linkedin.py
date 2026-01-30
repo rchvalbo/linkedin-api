@@ -2083,6 +2083,235 @@ class Linkedin(object):
         
         return True
 
+    def register_media_upload(self, filename, file_size, media_type="MESSAGING_FILE_ATTACHMENT"):
+        """Register a media upload with LinkedIn to get an upload URL and asset URN.
+        
+        This is Step 1 of the LinkedIn attachment upload flow.
+        
+        :param filename: Name of the file to upload
+        :type filename: str
+        :param file_size: Size of the file in bytes
+        :type file_size: int
+        :param media_type: Type of media upload (default: MESSAGING_FILE_ATTACHMENT)
+        :type media_type: str
+        
+        :return: Dict with urn, singleUploadUrl, or error dict with status/message
+        :rtype: dict
+        """
+        headers = {
+            "accept": "application/vnd.linkedin.normalized+json+2.1",
+            "content-type": "application/json; charset=UTF-8",
+            "x-restli-protocol-version": "2.0.0",
+        }
+        
+        payload = {
+            "mediaUploadType": media_type,
+            "fileSize": file_size,
+            "filename": filename
+        }
+        
+        res = self._post(
+            "/voyagerVideoDashMediaUploadMetadata",
+            params={"action": "upload"},
+            data=json.dumps(payload),
+            headers=headers
+        )
+        
+        if res.status_code == 401:
+            return {"status": 401, "message": "LinkedIn session expired"}
+        elif res.status_code == 429:
+            return {"status": 429, "message": "Rate limit exceeded"}
+        elif res.status_code != 200:
+            return {"status": res.status_code, "message": f"LinkedIn API error: {res.status_code}"}
+        
+        data = res.json()
+        value = data.get("data", {}).get("value", {})
+        
+        return {
+            "urn": value.get("urn"),
+            "singleUploadUrl": value.get("singleUploadUrl"),
+            "mediaArtifactUrn": value.get("mediaArtifactUrn"),
+            "pollingUrl": value.get("pollingUrl"),
+            "type": value.get("type")
+        }
+
+    def upload_media_binary(self, upload_url, file_bytes, content_type="application/octet-stream"):
+        """Upload the actual file binary to LinkedIn's upload URL.
+        
+        This is Step 2 of the LinkedIn attachment upload flow.
+        
+        :param upload_url: The singleUploadUrl from register_media_upload
+        :type upload_url: str
+        :param file_bytes: The file content as bytes
+        :type file_bytes: bytes
+        :param content_type: MIME type of the file
+        :type content_type: str
+        
+        :return: True if successful, error dict otherwise
+        :rtype: bool or dict
+        """
+        headers = {
+            "Content-Type": content_type,
+        }
+        
+        # This is a direct PUT to LinkedIn's upload URL (not through our API wrapper)
+        try:
+            res = self.client.session.put(upload_url, data=file_bytes, headers=headers)
+            
+            if res.status_code == 401:
+                return {"status": 401, "message": "LinkedIn session expired"}
+            elif res.status_code == 429:
+                return {"status": 429, "message": "Rate limit exceeded"}
+            elif res.status_code not in [200, 201]:
+                return {"status": res.status_code, "message": f"Upload failed: {res.status_code}"}
+            
+            return True
+        except Exception as e:
+            return {"status": 500, "message": f"Upload error: {str(e)}"}
+
+    def send_message_with_attachment(
+        self, 
+        message_body, 
+        asset_urn, 
+        file_name, 
+        file_size, 
+        mime_type,
+        conversation_urn_id=None, 
+        recipients=None, 
+        sender_urn_id=None
+    ):
+        """Send a message with an attachment to a given conversation.
+        
+        This is Step 3 of the LinkedIn attachment upload flow.
+        The attachment must already be uploaded via register_media_upload and upload_media_binary.
+        
+        :param message_body: Message text to send
+        :type message_body: str
+        :param asset_urn: The asset URN from register_media_upload (e.g., urn:li:digitalmediaAsset:xxx)
+        :type asset_urn: str
+        :param file_name: Original filename of the attachment
+        :type file_name: str
+        :param file_size: Size of the file in bytes
+        :type file_size: int
+        :param mime_type: MIME type of the file (e.g., application/pdf)
+        :type mime_type: str
+        :param conversation_urn_id: LinkedIn conversation URN ID (e.g., '2-xxx')
+        :type conversation_urn_id: str, optional
+        :param recipients: List of profile urn id's (used if no conversation_urn_id)
+        :type recipients: list, optional
+        :param sender_urn_id: The sender's profile URN ID
+        :type sender_urn_id: str, optional
+        
+        :return: Error state or success dict
+        :rtype: bool, int, or dict
+        """
+        if not (conversation_urn_id or recipients):
+            self.logger.debug("Must provide [conversation_urn_id] or [recipients].")
+            return True
+
+        # Get sender URN if not provided
+        if not sender_urn_id:
+            user_profile = self.get_user_profile()
+            if isinstance(user_profile, dict) and "status" in user_profile:
+                return True
+            sender_urn_id = user_profile.get("miniProfile", {}).get("entityUrn", "").split(":")[-1]
+            if not sender_urn_id:
+                sender_urn_id = user_profile.get("plainId")
+
+        full_sender_urn = f"urn:li:fsd_profile:{sender_urn_id}"
+
+        # Build the attachment object
+        attachment = {
+            "file": {
+                "assetUrn": asset_urn,
+                "byteSize": file_size,
+                "mediaType": mime_type,
+                "name": file_name,
+                "url": f"blob:https://www.linkedin.com/{str(uuid.uuid4())}"
+            }
+        }
+
+        headers = {
+            "accept": "application/json",
+            "x-restli-protocol-version": "2.0.0",
+            "content-type": "application/json",
+        }
+
+        # Determine conversation URN
+        if conversation_urn_id:
+            existing_conversation_id = conversation_urn_id
+        else:
+            # Get existing conversation for recipient
+            recipient_urn = recipients[0] if recipients else None
+            if not recipient_urn:
+                return True
+            
+            conv_details = self.get_conversation_details(recipient_urn)
+            if isinstance(conv_details, dict) and "status" in conv_details:
+                status = conv_details.get("status")
+                if status == 429:
+                    return 429
+                return True
+            
+            existing_conversation_id = conv_details.get("id") if conv_details else None
+
+        if existing_conversation_id:
+            # Existing conversation
+            full_conversation_urn = f"urn:li:msg_conversation:({full_sender_urn},{existing_conversation_id})"
+            
+            payload = {
+                "message": {
+                    "body": {
+                        "attributes": [],
+                        "text": message_body
+                    },
+                    "renderContentUnions": [attachment],
+                    "conversationUrn": full_conversation_urn,
+                    "originToken": str(uuid.uuid4())
+                },
+                "mailboxUrn": full_sender_urn,
+                "trackingId": generate_trackingId_as_charString(),
+                "dedupeByClientGeneratedToken": False
+            }
+        else:
+            # New conversation
+            full_recipient_urn = f"urn:li:fsd_profile:{recipients[0]}"
+            
+            payload = {
+                "message": {
+                    "body": {
+                        "attributes": [],
+                        "text": message_body
+                    },
+                    "renderContentUnions": [attachment],
+                    "originToken": str(uuid.uuid4())
+                },
+                "hostRecipientUrns": [full_recipient_urn],
+                "mailboxUrn": full_sender_urn,
+                "trackingId": generate_trackingId_as_charString(),
+                "dedupeByClientGeneratedToken": False
+            }
+
+        res = self._post(
+            "/voyagerMessagingDashMessengerMessages",
+            params={"action": "createMessage"},
+            data=json.dumps(payload),
+            headers=headers
+        )
+
+        if res.status_code == 429:
+            return 429
+        
+        if res.status_code == 200:
+            response_data = res.json()
+            return {
+                "success": True,
+                "message_urn": response_data.get("value", {}).get("entityUrn"),
+                "conversation_urn": response_data.get("value", {}).get("conversationUrn")
+            }
+        
+        return True  # Error
+
     def mark_conversation_as_seen(self, conversation_urn_id):
         """Send 'seen' to a given conversation.
 

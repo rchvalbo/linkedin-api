@@ -1249,15 +1249,13 @@ class Linkedin(object):
 
         # Construct the profile URN
         if urn_id:
-            # Upstream systems often store the raw ID (e.g., ACoA...) which may represent
-            # either a fsd_profile or a fs_miniProfile URN. We try fsd_profile first, and
-            # fall back to fs_miniProfile on 404.
+            # The dash/profiles endpoint only accepts fsd_profile URNs.
+            # fs_miniProfile is a legacy type that this endpoint rejects with 400.
             if urn_id.startswith("urn:li:"):
                 candidate_profile_urns = [urn_id]
             else:
                 candidate_profile_urns = [
                     f"urn:li:fsd_profile:{urn_id}",
-                    f"urn:li:fs_miniProfile:{urn_id}",
                 ]
         else:
             # If only public_id is provided, urn_id is required

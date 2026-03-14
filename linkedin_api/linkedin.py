@@ -1893,6 +1893,7 @@ class Linkedin(object):
 
         res = self._fetch(f"/messaging/conversations", params=params)
 
+        res.encoding = "utf-8"
         return res.json()
 
     def get_conversation(self, conversation_urn_id):
@@ -1916,6 +1917,7 @@ class Linkedin(object):
         elif res.status_code >= 400:
             return {"status": res.status_code, "message": f"LinkedIn API error: {res.status_code}"}
 
+        res.encoding = "utf-8"
         return res.json()
 
     def send_message(self, message_body, conversation_urn_id=None, recipients=None, sender_urn_id=None):

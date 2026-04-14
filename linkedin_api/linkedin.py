@@ -467,11 +467,15 @@ class Linkedin(object):
 
         return results
 
-    def search_companies(self, keywords=None, **kwargs):
+    def search_companies(
+        self,
+        keywords=None,
+        **kwargs
+    ):
         """Perform a LinkedIn search for companies.
 
-        :param keywords: A list of search keywords (str)
-        :type keywords: list, optional
+        :param keywords: Search keywords (str)
+        :type keywords: str, optional
 
         :return: List of companies
         :rtype: list
@@ -481,6 +485,7 @@ class Linkedin(object):
         params = {
             "filters": "List({})".format(",".join(filters)),
             "queryContext": "List(spellCorrectionEnabled->true)",
+            "origin": "FACETED_SEARCH",
         }
 
         if keywords:
@@ -488,9 +493,12 @@ class Linkedin(object):
 
         data = self.search(params, **kwargs)
 
+        if isinstance(data, dict):
+            return data
+
         results = []
         for item in data:
-            if "company" not in item.get("trackingUrn"):
+            if not item.get("trackingUrn") or "company" not in item.get("trackingUrn"):
                 continue
             results.append(
                 {
@@ -1792,7 +1800,7 @@ class Linkedin(object):
         :param public_id: LinkedIn public ID for a company
         :type public_id: str
 
-        :return: Company data
+        :return: Company data dict, or structured error dict with 'status' key on failure
         :rtype: dict
         """
         params = {
@@ -1801,12 +1809,32 @@ class Linkedin(object):
             "universalName": public_id,
         }
 
-        res = self._fetch(f"/organization/companies", params=params)
+        try:
+            res = self._fetch(f"/organization/companies", params=params)
+            res.raise_for_status()
+        except requests.exceptions.HTTPError as error:
+            status = error.response.status_code
+            if status == 429:
+                self.logger.warning(f"get_company: rate limited (429) for {public_id}")
+                return {"status": 429, "message": "Rate limit exceeded"}
+            elif status == 401:
+                self.logger.warning(f"get_company: unauthorized (401) for {public_id}")
+                return {"status": 401, "message": "Unauthorized"}
+            else:
+                self.logger.warning(f"get_company: HTTP {status} for {public_id}: {error}")
+                return {"status": status, "message": str(error)}
+        except Exception as err:
+            self.logger.warning(f"get_company: network error for {public_id}: {err}")
+            return {"error": str(err), "message": "Network or connection error"}
 
         data = res.json()
 
         if data and "status" in data and data["status"] != 200:
-            self.logger.info("request failed: {}".format(data["message"]))
+            self.logger.info("request failed: {}".format(data.get("message", "unknown error")))
+            return {"status": data["status"], "message": data.get("message", "unknown error")}
+
+        if not data or "elements" not in data or not data["elements"]:
+            self.logger.info("get_company: no elements in response for {}".format(public_id))
             return {}
 
         company = data["elements"][0]
@@ -1849,9 +1877,11 @@ class Linkedin(object):
         }
         
         # Only add referer header if publicId is provided
+        # ASCII-encode the public_id to prevent UnicodeEncodeError in http.client header encoding
         if public_id:
-            headers["referer"] = f"https://www.linkedin.com/in/{public_id}/"
-        
+            safe_public_id = public_id.encode('ascii', errors='ignore').decode('ascii')
+            headers["referer"] = f"https://www.linkedin.com/in/{safe_public_id}/"
+
         res = self._fetch(url, headers=headers)
 
         # Check for HTTP errors
@@ -1864,6 +1894,7 @@ class Linkedin(object):
         elif res.status_code >= 400:
             return {"status": res.status_code, "message": f"LinkedIn API error: {res.status_code}"}
 
+        res.encoding = "utf-8"
         data = res.json()
         
         # Extract conversation URN from the new response format
@@ -1972,7 +2003,9 @@ class Linkedin(object):
             
             if res.status_code == 429:
                 return 429
-            return res.status_code != 201
+            if res.status_code not in (200, 201):
+                self.logger.warning(f"send_message unexpected status: {res.status_code} body={res.text[:200]}")
+            return res.status_code not in (200, 201)
 
         # PATH 2: If we have recipients but no conversation_urn_id, use new GraphQL endpoint
         # (Legacy /messaging/conversations endpoint is broken with 500 errors)

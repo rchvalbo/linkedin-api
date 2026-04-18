@@ -797,28 +797,33 @@ class Linkedin(object):
 
         # GraphQL query ID for profile contact info
         query_id = "voyagerIdentityDashProfiles.c7452e58fa37646d09dae4920fc5b4b9"
-        
+
+        # Strip non-ASCII characters (e.g. emoji) from public_id to prevent
+        # UnicodeEncodeError in http.client's latin-1 header encoding.
+        # LinkedIn vanity URLs can contain emoji but HTTP headers cannot.
+        safe_public_id = public_id.encode('ascii', errors='ignore').decode('ascii')
+
         # Build the variables string
-        variables = f"(memberIdentity:{public_id})"
-        
+        variables = f"(memberIdentity:{safe_public_id})"
+
         # Construct the query string manually - LinkedIn expects it exactly as shown
         include_metadata = "true" if include_web_metadata else "false"
         query_string = f"includeWebMetadata={include_metadata}&variables={variables}&queryId={query_id}"
         full_url = f"/graphql?{query_string}"
-        
+
         logger.info(f"Fetching contact info for public_id: {public_id}")
         logger.info(f"Full URL: {full_url}")
-        
+
         # Generate a page instance ID for contact details page
         random_bytes = bytes([random.randint(0, 255) for _ in range(16)])
         page_instance_id = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
         page_instance = f"urn:li:page:d_flagship3_profile_view_base_contact_details;{page_instance_id}"
-        
+
         # Add required headers for GraphQL endpoint
         headers = {
             "accept": "application/vnd.linkedin.normalized+json+2.1",
             "x-restli-protocol-version": "2.0.0",
-            "referer": f"https://www.linkedin.com/in/{public_id}/",
+            "referer": f"https://www.linkedin.com/in/{safe_public_id}/",
             "x-li-page-instance": page_instance,
             "x-li-track": '{"clientVersion":"1.13.39992","mpVersion":"1.13.39992","osName":"web","timezoneOffset":-4,"timezone":"America/New_York","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":2,"displayWidth":6400,"displayHeight":2666}',
         }

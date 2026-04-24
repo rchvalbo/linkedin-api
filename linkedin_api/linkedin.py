@@ -2500,8 +2500,16 @@ class Linkedin(object):
             params=params,
         )
         print('status code:', res.status_code)
-        
+
         if res.status_code == 429:
+            # Log headers + body so we can tell a real LinkedIn weekly-quota
+            # 429 apart from a transient proxy-level 429. The caller applies a
+            # Sunday-long restriction on 429, which is expensive to get wrong.
+            try:
+                print(f'429 response headers: {dict(res.headers)}')
+                print(f'429 response body: {res.text[:1000]}')
+            except Exception as log_error:
+                print(f'429 logging failed: {log_error}')
             return 429
         
         # 406 means already sent request - treat same as 400 INVITATION_ALREADY_SENT

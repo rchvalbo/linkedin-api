@@ -905,8 +905,11 @@ class Linkedin(object):
             # Extract profile picture
             profile_picture = profile_data.get("profilePicture")
             if profile_picture:
-                # Get the display image reference (without frame)
-                display_image_ref = profile_picture.get("displayImageReferenceResolutionResult", {})
+                # `displayImageReferenceResolutionResult` is sometimes present
+                # but explicitly null in the GraphQL response, in which case
+                # dict.get(key, {}) returns None — not {} — and the next `.get`
+                # raises AttributeError. Use `or {}` to coalesce null to {}.
+                display_image_ref = profile_picture.get("displayImageReferenceResolutionResult") or {}
                 vector_image = display_image_ref.get("vectorImage")
                 
                 if vector_image:
